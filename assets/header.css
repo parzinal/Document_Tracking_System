@@ -1,0 +1,137 @@
+/* =========================================================
+   Header / Navbar — Dual Theme (Blue = Big Five, Red = Blossom)
+   ========================================================= */
+
+/* ---- Theme Variables ---- */
+.theme-bigfive {
+    --accent:         #638ECB;
+    --accent-dark:    #0e2240;
+    --accent-mid:     #2a4d7a;
+    --accent-light:   #e5eef8;
+    --accent-glow:    rgba(99, 142, 203, 0.45);
+    --accent-gradient: linear-gradient(135deg, #0e2240 0%, #2a4d7a 50%, #638ECB 100%);
+    --stat1: linear-gradient(135deg, #2a4d7a, #638ECB);
+    --stat2: linear-gradient(135deg, #1a7a4a, #26a96a);
+    --stat3: linear-gradient(135deg, #b56200, #e5830a);
+    --stat4: linear-gradient(135deg, #7a3a9e, #a855d6);
+    --nav-active-color: #a8c8ef;
+    --nav-icon-color:   #7aacdb;
+    --pill-bg: rgba(168, 200, 239, 0.12);
+    --pill-border: rgba(168, 200, 239, 0.35);
+    --pill-text: #b8d4f5;
+    --tab-active-bg: #2a4d7a;
+    --tab-active-text: #a8c8ef;
+}
+
+.theme-blossom {
+    --accent:         #B20808;
+    --accent-dark:    #260202;
+    --accent-mid:     #5c1010;
+    --accent-light:   #fce8e8;
+    --accent-glow:    rgba(178, 8, 8, 0.45);
+    --accent-gradient: linear-gradient(135deg, #260202 0%, #5c1010 50%, #B20808 100%);
+    --stat1: linear-gradient(135deg, #5c1010, #B20808);
+    --stat2: linear-gradient(135deg, #1a7a4a, #26a96a);
+    --stat3: linear-gradient(135deg, #b56200, #e5830a);
+    --stat4: linear-gradient(135deg, #7a3a9e, #a855d6);
+    --nav-active-color: #ff8080;
+    --nav-icon-color:   #d47070;
+    --pill-bg: rgba(255, 128, 128, 0.12);
+    --pill-border: rgba(255, 128, 128, 0.35);
+    --pill-text: #ffa0a0;
+    --tab-active-bg: #5c1010;
+    --tab-active-text: #ff8080;
+}
+
+/* ---- Navbar ---- */
+.tb5-navbar {
+    background: var(--accent-gradient);
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.4);
+    min-height: 66px;
+    z-index: 1050;
+    padding: 0;
+    border-bottom: 2px solid rgba(255,255,255,0.06);
+}
+
+/* ---- Logo (clickable, switches system) ---- */
+.logo-switch-btn {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    flex-shrink: 0;
+}
+
+.logo-wrapper {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    overflow: hidden;
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(8px);
+    border: 2px solid rgba(255,255,255,0.15);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.logo-switch-btn:hover .logo-wrapper {
+    /* remove visual hover transition so system name area stays static */
+    border-color: rgba(255,255,255,0.15);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+}
+
+.system-logo {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    padding: 4px;
+}
+
+/* ---- System name ---- */
+.system-name {
+    color: #fff;
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.3);
+    flex: 1 1 auto;
+    padding: 0;
+}
+
+/* Ensure system name remains white on hover/focus and not change to dark/black */
+.system-name:hover,
+.system-name:focus {
+    color: #fff !important;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.3) !important;
+    cursor: default;
+}
+
+/* ---- User badge ---- */
+.user-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: rgba(255,255,255,0.8);
+    font-size: 0.82rem;
+    font-weight: 500;
+    padding: 6px 14px;
+    border-radius: 50px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+}
+
+.user-badge i {
+    font-size: 1rem;
+    opacity: 0.8;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 768px) {
+    .system-name {
+        font-size: 0.82rem;
+    }
+    .logo-wrapper {
+        width: 40px;
+        height: 40px;
+    }
+}

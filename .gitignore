@@ -1,0 +1,33 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# PHP dependencies
+/vendor/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Project config with credentials/secrets
+/config/database.php
+
+# User uploads and generated files
+/assets/upload/
+
+# Logs and cache
+*.log
+*.cache
+/tmp/
+
+# Composer lock (optional: keep if you want deterministic installs)
+# composer.lock
+
+# Nested/duplicate local repos (do not include in this repo)
+/Document-Tracking-System/
+/Document_Tracking_System/
+/Documents Tracker System/
+/desktop-tutorial/
