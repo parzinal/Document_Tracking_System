@@ -18,6 +18,20 @@ $stmtPend->execute([$sid]); $pendingDocs = (int)$stmtPend->fetchColumn();
 $stmtRel  = $pdo->prepare('SELECT COUNT(*) FROM documents WHERE system_id=? AND is_archived=0 AND tesda_released IS NOT NULL');
 $stmtRel->execute([$sid]); $releasedDocs = (int)$stmtRel->fetchColumn();
 
+// Category totals for dashboard chart
+$stmtCatStats = $pdo->prepare(
+    'SELECT COALESCE(c.name, "Uncategorized") AS cat_name, COUNT(*) AS total
+     FROM documents d
+     LEFT JOIN categories c ON d.category_id = c.id
+     WHERE d.system_id=? AND d.is_archived=0
+     GROUP BY COALESCE(c.name, "Uncategorized")
+     ORDER BY total DESC, cat_name ASC'
+);
+$stmtCatStats->execute([$sid]);
+$categoryStats = $stmtCatStats->fetchAll();
+$categoryLabels = array_map(fn($r) => $r['cat_name'], $categoryStats);
+$categoryCounts = array_map(fn($r) => (int)$r['total'], $categoryStats);
+
 // Recent documents
 $stmtRecent = $pdo->prepare(
     'SELECT d.*, c.name AS cat_name, dt.name AS doc_type_name, q.name AS qual_name
@@ -100,10 +114,27 @@ $recentDocs = $stmtRecent->fetchAll();
         </div>
     </div>
 
+    <!-- Category Overview Chart -->
+    <div class="table-card mb-4">
+        <div style="padding:16px 22px;border-bottom:1px solid #eef1f5;display:flex;align-items:center;justify-content:space-between;">
+            <span class="fw-semibold" style="color:#1a2332;"><i class="bi bi-bar-chart-line me-2" style="color:var(--accent, #1a6fc4)"></i>Documents Per Category</span>
+            <span class="text-muted" style="font-size:.82rem;">Active records only</span>
+        </div>
+        <div style="padding:18px 22px;">
+            <?php if (empty($categoryStats)): ?>
+                <div class="text-center text-muted py-4">No category data yet.</div>
+            <?php else: ?>
+                <div style="height:320px;">
+                    <canvas id="categoryChart"></canvas>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
     <!-- Recent Documents Table -->
     <div class="table-card">
         <div style="padding:16px 22px;border-bottom:1px solid #eef1f5;display:flex;align-items:center;justify-content:space-between;">
-            <span class="fw-semibold" style="color:#1a2332;"><i class="bi bi-clock-history me-2" style="color:var(--accent, #1a6fc4)"></i>Recent Documents</span>
+            <span class="fw-semibold" style="color:#1a2332;"><i class="bi bi-clock-history me-2" style="color:var(--accent, #1a6fc4)"></i>Recent Document Files</span>
             <a href="documents_tracking.php" class="btn btn-tb5-primary" style="font-size:0.8rem;padding:7px 16px;">
                 View All <i class="bi bi-arrow-right ms-1"></i>
             </a>
@@ -118,12 +149,13 @@ $recentDocs = $stmtRecent->fetchAll();
                             <th>Qualification</th>
                             <th>Date Submitted</th>
                             <th>Received by TESDA</th>
-                            <th>Status</th>
+                            <th>Image</th>
+                            <th>File</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if (empty($recentDocs)): ?>
-                        <tr><td colspan="6" class="text-center text-muted py-4">No documents yet.</td></tr>
+                        <tr><td colspan="7" class="text-center text-muted py-4">No documents yet.</td></tr>
                         <?php else: ?>
                         <?php foreach ($recentDocs as $doc): ?>
                         <tr>
@@ -133,15 +165,18 @@ $recentDocs = $stmtRecent->fetchAll();
                             <td><?= $doc['date_submission'] ? date('m/d/Y', strtotime($doc['date_submission'])) : '—' ?></td>
                             <td><?= $doc['received_tesda']  ? date('m/d/Y', strtotime($doc['received_tesda']))  : '—' ?></td>
                             <td>
-                                <?php if (!empty($doc['remarks']) && strtolower($doc['remarks']) === 'returned'): ?>
-                                    <span class="status-pill" style="background:#fff0f0;color:#a51d2d;">Returned</span>
-                                <?php elseif ($doc['tesda_released']): ?>
-                                    <span class="status-pill" style="background:#e6f9ef;color:#1a7a4a;">Released</span>
-                                <?php elseif ($doc['date_assessment']): ?>
-                                    <span class="status-pill" style="background:#e6f2ff;color:#1a5fb4;">Assessed</span>
+                                <?php if (!empty($doc['image_path'])): ?>
+                                    <a href="../<?= htmlspecialchars($doc['image_path']) ?>" target="_blank" rel="noopener">
+                                        <img src="../<?= htmlspecialchars($doc['image_path']) ?>" alt="doc" style="width:36px;height:36px;object-fit:cover;border:1px solid #dbe3ee;border-radius:6px;" onerror="this.style.display='none'">
+                                    </a>
                                 <?php else: ?>
-                                    <span class="status-pill" style="background:#fff8e6;color:#b56200;">Pending</span>
+                                    <span class="text-muted">—</span>
                                 <?php endif; ?>
+                            </td>
+                            <td>
+                                <a href="documents_tracking.php?doc_id=<?= (int)$doc['id'] ?>" class="btn btn-sm btn-outline-primary">
+                                    <i class="bi bi-search me-1"></i>Locate
+                                </a>
                             </td>
                         </tr>
                         <?php endforeach; ?>
@@ -153,7 +188,56 @@ $recentDocs = $stmtRecent->fetchAll();
     </div>
 </main>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="../assets/js/main.js"></script>
+<script>
+(function() {
+    const chartEl = document.getElementById('categoryChart');
+    if (!chartEl) return;
+
+    const labels = <?= json_encode($categoryLabels, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>;
+    const data = <?= json_encode($categoryCounts, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>;
+    const isBlossom = <?= json_encode($themeClass === 'theme-blossom') ?>;
+
+    const base = isBlossom ? '180, 8, 8' : '26, 111, 196';
+    const border = isBlossom ? '#7c0b0b' : '#1a5fb4';
+
+    new Chart(chartEl, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Documents',
+                data: data,
+                backgroundColor: `rgba(${base}, 0.22)`,
+                borderColor: border,
+                borderWidth: 1.5,
+                borderRadius: 8,
+                maxBarThickness: 48
+            }]
+        },
+        options: {
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        precision: 0,
+                        stepSize: 1
+                    },
+                    grid: { color: 'rgba(120,130,145,0.2)' }
+                },
+                x: {
+                    grid: { display: false }
+                }
+            }
+        }
+    });
+})();
+</script>
 </body>
 </html>

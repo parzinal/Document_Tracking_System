@@ -121,11 +121,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Location: documents_tracking.php?'.http_build_query(array_filter(['cat'=>$_GET['cat']??'','dt'=>$_GET['dt']??'','qual'=>$_GET['qual']??'']))); exit;
 }
 
-$filterCat=(int)($_GET['cat']??0); $filterDt=(int)($_GET['dt']??0); $filterQual=(int)($_GET['qual']??0);
+$filterCat=(int)($_GET['cat']??0); $filterDt=(int)($_GET['dt']??0); $filterQual=(int)($_GET['qual']??0); $focusDocId=(int)($_GET['doc_id']??0);
 $where=['d.system_id=?','d.is_archived=0']; $params=[$sid];
 if($filterCat){ $where[]='d.category_id=?'; $params[]=$filterCat; }
 if($filterDt){  $where[]='d.document_type_id=?'; $params[]=$filterDt; }
 if($filterQual){ $where[]='d.qualification_id=?'; $params[]=$filterQual; }
+if($focusDocId){ $where[]='d.id=?'; $params[]=$focusDocId; }
 $stmt=$pdo->prepare("SELECT d.*,c.name AS cat_name,dt.name AS doc_type_name,q.name AS qual_name FROM documents d LEFT JOIN categories c ON d.category_id=c.id LEFT JOIN document_types dt ON d.document_type_id=dt.id LEFT JOIN qualifications q ON d.qualification_id=q.id WHERE ".implode(' AND ',$where)." ORDER BY d.created_at DESC");
 $stmt->execute($params); $documents=$stmt->fetchAll();
 
