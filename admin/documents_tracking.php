@@ -118,14 +118,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    header('Location: documents_tracking.php?'.http_build_query(array_filter(['cat'=>$_GET['cat']??'','dt'=>$_GET['dt']??'','qual'=>$_GET['qual']??'']))); exit;
+    header('Location: documents_tracking.php?'.http_build_query(array_filter(['cat'=>$_GET['cat']??'','dt'=>$_GET['dt']??'','qual'=>$_GET['qual']??'','sub_doc'=>$_GET['sub_doc']??'','batch'=>$_GET['batch']??'','date_sub'=>$_GET['date_sub']??'']))); exit;
 }
 
 $filterCat=(int)($_GET['cat']??0); $filterDt=(int)($_GET['dt']??0); $filterQual=(int)($_GET['qual']??0); $focusDocId=(int)($_GET['doc_id']??0);
+$filterSubDoc = trim((string)($_GET['sub_doc'] ?? ''));
+$filterBatch = trim((string)($_GET['batch'] ?? ''));
+$filterDateSubRaw = trim((string)($_GET['date_sub'] ?? ''));
+$filterDateSub = preg_match('/^\d{4}-\d{2}-\d{2}$/', $filterDateSubRaw) ? $filterDateSubRaw : '';
 $where=['d.system_id=?','d.is_archived=0']; $params=[$sid];
 if($filterCat){ $where[]='d.category_id=?'; $params[]=$filterCat; }
 if($filterDt){  $where[]='d.document_type_id=?'; $params[]=$filterDt; }
 if($filterQual){ $where[]='d.qualification_id=?'; $params[]=$filterQual; }
+if($filterSubDoc !== ''){ $where[]='d.document_sub=?'; $params[]=$filterSubDoc; }
+if($filterBatch !== ''){ $where[]='d.batch_no=?'; $params[]=$filterBatch; }
+if($filterDateSub){ $where[]='d.date_submission=?'; $params[]=$filterDateSub; }
 if($focusDocId){ $where[]='d.id=?'; $params[]=$focusDocId; }
 $stmt=$pdo->prepare("SELECT d.*,c.name AS cat_name,dt.name AS doc_type_name,q.name AS qual_name FROM documents d LEFT JOIN categories c ON d.category_id=c.id LEFT JOIN document_types dt ON d.document_type_id=dt.id LEFT JOIN qualifications q ON d.qualification_id=q.id WHERE ".implode(' AND ',$where)." ORDER BY d.created_at DESC");
 $stmt->execute($params); $documents=$stmt->fetchAll();
@@ -133,6 +140,12 @@ $stmt->execute($params); $documents=$stmt->fetchAll();
 $cats=$pdo->prepare('SELECT * FROM categories WHERE system_id=? ORDER BY name'); $cats->execute([$sid]); $categories=$cats->fetchAll();
 $dts=$pdo->prepare('SELECT * FROM document_types WHERE system_id=? ORDER BY name'); $dts->execute([$sid]); $documentTypes=$dts->fetchAll();
 $quals=$pdo->prepare('SELECT * FROM qualifications WHERE system_id=? ORDER BY name'); $quals->execute([$sid]); $qualifications=$quals->fetchAll();
+$subDocsFilterStmt = $pdo->prepare('SELECT DISTINCT document_sub FROM documents WHERE system_id=? AND is_archived=0 AND document_sub IS NOT NULL AND TRIM(document_sub)<>"" ORDER BY document_sub');
+$subDocsFilterStmt->execute([$sid]);
+$subDocFilterOptions = $subDocsFilterStmt->fetchAll(PDO::FETCH_COLUMN);
+$batchFilterStmt = $pdo->prepare('SELECT DISTINCT batch_no FROM documents WHERE system_id=? AND is_archived=0 AND batch_no IS NOT NULL AND TRIM(batch_no)<>"" ORDER BY batch_no');
+$batchFilterStmt->execute([$sid]);
+$batchFilterOptions = $batchFilterStmt->fetchAll(PDO::FETCH_COLUMN);
 
 $dtByCat=[];
 foreach($documentTypes as $dt){ $cid=(int)($dt['category_id']??0); $dtByCat[$cid][]=['id'=>$dt['id'],'name'=>$dt['name']]; }
@@ -196,15 +209,177 @@ foreach($subsStmt->fetchAll() as $s){ $docSubs[(int)$s['document_type_id']][]=$s
         tr.row-invalid{outline:2px solid #dc3545}
 
         /* Table usability improvements */
-        .table-responsive { max-height: 72vh; overflow: auto; }
-        #documentsTable { min-width: 1960px; }
+        .table-responsive {
+            max-height: 72vh;
+            overflow: auto;
+            border-radius: 14px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(247,250,255,0.98));
+        }
+        #documentsTable {
+            min-width: 1960px;
+            border-collapse: separate;
+            border-spacing: 0 9px;
+            margin: 0;
+            padding: 0 8px 10px;
+        }
         #documentsTable thead th {
             position: sticky;
             top: 0;
-            z-index: 3;
+            z-index: 4;
             white-space: nowrap;
+            box-shadow: inset 0 -1px 0 rgba(255,255,255,0.08);
         }
         #documentsTable td { white-space: nowrap; }
+        #documentsTable tbody td {
+            background: #fff;
+            color: #253449;
+            border-top: 1px solid #e5ebf3;
+            border-bottom: 1px solid #e5ebf3;
+            padding: 10px 11px;
+            font-size: .79rem;
+            vertical-align: middle;
+        }
+        #documentsTable tbody td:first-child {
+            border-left: 1px solid #e5ebf3;
+            border-radius: 12px 0 0 12px;
+        }
+        #documentsTable tbody td:last-child {
+            border-right: 1px solid #e5ebf3;
+            border-radius: 0 12px 12px 0;
+        }
+        #documentsTable tbody tr {
+            transition: transform .16s ease, filter .16s ease;
+        }
+        #documentsTable tbody tr:hover {
+            transform: translateY(-1px);
+            filter: drop-shadow(0 6px 12px rgba(15, 35, 60, 0.08));
+        }
+        #documentsTable tbody tr:hover td {
+            background: #f8fbff;
+            border-top-color: #dbe5f2;
+            border-bottom-color: #dbe5f2;
+        }
+        .theme-blossom #documentsTable tbody tr:hover td {
+            background: #fff8f8;
+            border-top-color: #efd9d9;
+            border-bottom-color: #efd9d9;
+        }
+
+        #documentsTable .row-check {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent, #2a4d7a);
+            cursor: pointer;
+        }
+        #documentsTable .td-check {
+            text-align: center;
+        }
+
+        #documentsTable .doc-pill,
+        #documentsTable .date-chip {
+            display: inline-flex;
+            align-items: center;
+            max-width: 210px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            border-radius: 999px;
+            padding: 4px 11px;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+        #documentsTable .doc-pill {
+            border: 1px solid #d8e2ef;
+            background: #f6f9fd;
+            color: #2b3f5e;
+        }
+        #documentsTable .doc-pill-cat {
+            background: color-mix(in srgb, var(--accent-light, #e5eef8) 88%, white 12%);
+            border-color: color-mix(in srgb, var(--accent, #638ECB) 26%, #d8e2ef 74%);
+            color: var(--accent-dark, #0e2240);
+        }
+        #documentsTable .doc-pill-type {
+            background: #eef5ff;
+            border-color: #cfdff3;
+        }
+        #documentsTable .doc-pill-qual,
+        #documentsTable .doc-pill-sub,
+        #documentsTable .doc-pill-batch {
+            background: #f8fafd;
+            border-color: #dce4ef;
+            color: #3b4d64;
+        }
+
+        #documentsTable .date-chip {
+            border: 1px solid #d7e3f2;
+            background: #f3f8ff;
+            color: #2f4b70;
+            font-weight: 700;
+            font-size: .74rem;
+            letter-spacing: .01em;
+        }
+
+        #documentsTable .remark-chip {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 4px 10px;
+            font-size: .72rem;
+            font-weight: 700;
+            letter-spacing: .02em;
+            border: 1px solid transparent;
+        }
+        #documentsTable .remark-received {
+            background: #e9f9f0;
+            color: #15603c;
+            border-color: #c6ead6;
+        }
+        #documentsTable .remark-returned {
+            background: #fff4e8;
+            color: #7a4a08;
+            border-color: #efd4b0;
+        }
+        .theme-blossom #documentsTable .remark-returned {
+            background: #fff1f1;
+            color: #8a3e3e;
+            border-color: #eac8c8;
+        }
+
+        #documentsTable .empty-cell {
+            color: #9aa8b8;
+            font-style: italic;
+        }
+
+        #documentsTable .img-cell-wrap {
+            width: 52px;
+            height: 52px;
+            border-radius: 12px;
+            border: 1px solid #d8e2ef;
+            background: #f3f7fd;
+            overflow: hidden;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        #documentsTable .doc-thumb {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        #documentsTable .td-actions .btn-action {
+            width: 34px;
+            height: 34px;
+            border-radius: 10px;
+        }
+
+        .slide-dt-foot {
+            font-weight: 600;
+            color: #667a92;
+            background: #fff;
+        }
         #documentsTable th:nth-child(2), #documentsTable td:nth-child(2) { min-width: 190px; }
         #documentsTable th:nth-child(3), #documentsTable td:nth-child(3) { min-width: 150px; }
         #documentsTable th:nth-child(4), #documentsTable td:nth-child(4) { min-width: 190px; }
@@ -264,10 +439,22 @@ foreach($subsStmt->fetchAll() as $s){ $docSubs[(int)$s['document_type_id']][]=$s
                     <option value="<?= $q['id'] ?>" <?= $filterQual==$q['id']?'selected':'' ?>><?= htmlspecialchars($q['name']) ?></option>
                 <?php endforeach; ?>
             </select>
-            <?php if ($filterCat||$filterDt||$filterQual): ?><a href="documents_tracking.php" class="dt-filter-clear"><i class="bi bi-x-circle me-1"></i>Clear</a><?php endif; ?>
+            <select name="sub_doc" class="dt-filter-select" onchange="this.form.submit()">
+                <option value="">All Sub-Documents</option>
+                <?php foreach ($subDocFilterOptions as $sub): ?>
+                    <option value="<?= htmlspecialchars((string)$sub) ?>" <?= $filterSubDoc===(string)$sub?'selected':'' ?>><?= htmlspecialchars((string)$sub) ?></option>
+                <?php endforeach; ?>
+            </select>
+            <select name="batch" class="dt-filter-select" onchange="this.form.submit()">
+                <option value="">All Batches</option>
+                <?php foreach ($batchFilterOptions as $batch): ?>
+                    <option value="<?= htmlspecialchars((string)$batch) ?>" <?= $filterBatch===(string)$batch?'selected':'' ?>><?= htmlspecialchars((string)$batch) ?></option>
+                <?php endforeach; ?>
+            </select>
+            <input type="date" name="date_sub" class="dt-filter-select" value="<?= htmlspecialchars($filterDateSub) ?>" onchange="this.form.submit()" title="Filter by Date Submitted">
+            <?php if ($filterCat||$filterDt||$filterQual||$filterSubDoc!==''||$filterBatch!==''||$filterDateSub): ?><a href="documents_tracking.php" class="dt-filter-clear"><i class="bi bi-x-circle me-1"></i>Clear</a><?php endif; ?>
         </form>
         <div class="dt-toolbar-actions no-print">
-            <a href="add_documents.php" class="btn btn-modern btn-success"><i class="bi bi-plus-lg"></i>Add Documents</a>
             <button type="button" class="btn btn-modern btn-warning" id="bulkArchiveBtn"><i class="bi bi-archive"></i>Archive</button>
             <button type="button" class="btn btn-modern btn-secondary" id="printBtn"><i class="bi bi-printer"></i>Print</button>
         </div>
@@ -292,43 +479,49 @@ foreach($subsStmt->fetchAll() as $s){ $docSubs[(int)$s['document_type_id']][]=$s
                     <tbody>
                     <?php foreach ($documents as $doc):
                         $dv=fn($v)=>htmlspecialchars($v??'');
-                        $df=fn($d)=>$d?date('m/d/Y',strtotime($d)):'';
+                        $pill = function($v, $cls='') {
+                            $val = trim((string)($v ?? ''));
+                            if ($val === '') return '<span class="empty-cell">—</span>';
+                            return '<span class="doc-pill '.$cls.'">'.htmlspecialchars($val).'</span>';
+                        };
+                        $dateChip = function($d) {
+                            if (empty($d)) return '<span class="empty-cell">—</span>';
+                            return '<span class="date-chip">'.htmlspecialchars(date('M d, Y', strtotime((string)$d))).'</span>';
+                        };
+                        $remarkVal = strtolower(trim((string)($doc['remarks'] ?? '')));
+                        $remarkHtml = '<span class="empty-cell">—</span>';
+                        if ($remarkVal === 'received') {
+                            $remarkHtml = '<span class="remark-chip remark-received">Received</span>';
+                        } elseif ($remarkVal === 'returned') {
+                            $remarkHtml = '<span class="remark-chip remark-returned">Returned</span>';
+                        }
                     ?>
                     <tr>
                         <td class="td-check"><input type="checkbox" name="selected_ids[]" value="<?= $doc['id'] ?>" class="row-check"></td>
-                        <td class="td-fixed"><?= $dv($doc['cat_name'])      ?:'' ?></td>
-                        <td class="td-fixed"><?= $dv($doc['qual_name'])     ?:'' ?></td>
-                        <td class="td-fixed"><?= $dv($doc['doc_type_name']) ?:'' ?></td>
-                        <td class="td-fixed"><?= $dv($doc['document_sub'])  ?:'' ?></td>
-                        <td class="td-fixed"><?= $dv($doc['batch_no'])      ?:'' ?></td>
-                        <td class="td-fixed"><?= $df($doc['date_submission']) ?></td>
-                        <td class="cell-field" data-field="received_tesda"  data-doc-id="<?= $doc['id'] ?>" data-type="date"  data-value="<?= $dv($doc['received_tesda']) ?>"><span class="cell-val"><?= $df($doc['received_tesda'])  ?: '<span class="empty-cell">—</span>' ?></span></td>
-                        <td class="td-fixed"><?= $df($doc['returned_center']) ?: '<span class="empty-cell">—</span>' ?></td>
-                        <td class="cell-field" data-field="staff_received"  data-doc-id="<?= $doc['id'] ?>" data-type="date"  data-value="<?= $dv($doc['staff_received']) ?>"><span class="cell-val"><?= $df($doc['staff_received'])  ?: '<span class="empty-cell">—</span>' ?></span></td>
-                        <td class="cell-field" data-field="date_assessment" data-doc-id="<?= $doc['id'] ?>" data-type="date"  data-value="<?= $dv($doc['date_assessment']) ?>"><span class="cell-val"><?= $df($doc['date_assessment']) ?: '<span class="empty-cell">—</span>' ?></span></td>
-                        <td class="cell-field" data-field="assessor_name"   data-doc-id="<?= $doc['id'] ?>" data-type="text"  data-value="<?= $dv($doc['assessor_name']) ?>"><span class="cell-val"><?= $dv($doc['assessor_name'])   ?: '<span class="empty-cell">—</span>' ?></span></td>
-                        <td class="cell-field" data-field="tesda_released"  data-doc-id="<?= $doc['id'] ?>" data-type="date"  data-value="<?= $dv($doc['tesda_released']) ?>"><span class="cell-val"><?= $df($doc['tesda_released'])  ?: '<span class="empty-cell">—</span>' ?></span></td>
-                        <td class="td-remarks">
-                            <select class="form-select remarks-select <?= $doc['remarks']==='received'?'remarks-received':($doc['remarks']==='returned'?'remarks-returned':'') ?>" data-doc-id="<?= $doc['id'] ?>">
-                                <option value="">—</option>
-                                <option value="received" <?= $doc['remarks']==='received'?'selected':'' ?>>Received</option>
-                                <option value="returned" <?= $doc['remarks']==='returned'?'selected':'' ?>>Returned</option>
-                            </select>
-                        </td>
+                        <td class="td-fixed"><?= $pill($doc['cat_name'], 'doc-pill-cat') ?></td>
+                        <td class="td-fixed"><?= $pill($doc['qual_name'], 'doc-pill-qual') ?></td>
+                        <td class="td-fixed"><?= $pill($doc['doc_type_name'], 'doc-pill-type') ?></td>
+                        <td class="td-fixed"><?= $pill($doc['document_sub'], 'doc-pill-sub') ?></td>
+                        <td class="td-fixed"><?= $pill($doc['batch_no'], 'doc-pill-batch') ?></td>
+                        <td class="td-fixed"><?= $dateChip($doc['date_submission']) ?></td>
+                        <td class="td-fixed"><?= $dateChip($doc['received_tesda']) ?></td>
+                        <td class="td-fixed"><?= $dateChip($doc['returned_center']) ?></td>
+                        <td class="td-fixed"><?= $pill($doc['staff_received'], 'doc-pill-batch') ?></td>
+                        <td class="td-fixed"><?= $dateChip($doc['date_assessment']) ?></td>
+                        <td class="td-fixed"><?= $pill($doc['assessor_name'], 'doc-pill-batch') ?></td>
+                        <td class="td-fixed"><?= $dateChip($doc['tesda_released']) ?></td>
+                        <td class="td-fixed"><?= $remarkHtml ?></td>
                         <td class="td-img">
                             <?php if($doc['image_path']): ?>
                                 <div class="img-cell-wrap" data-image="<?= htmlspecialchars($doc['image_path']) ?>">
                                     <img src="../<?= htmlspecialchars($doc['image_path']) ?>" class="doc-thumb" alt="doc" data-image="<?= htmlspecialchars($doc['image_path']) ?>" onerror="this.style.display='none'">
                                 </div>
                             <?php else: ?>
-                                <button type="button" class="btn btn-action btn-outline-secondary btn-upload-img" data-doc-id="<?= $doc['id'] ?>"><i class="bi bi-camera"></i></button>
+                                <span class="empty-cell">—</span>
                             <?php endif; ?>
                         </td>
                         <td class="td-actions no-print">
                             <div class="d-flex gap-1 justify-content-center">
-                                <button type="button" class="btn btn-action btn-outline-primary btn-edit-core" title="Edit"
-                                    data-row='<?= htmlspecialchars(json_encode(['doc_id'=>$doc['id'],'category_id'=>$doc['category_id'],'document_type_id'=>$doc['document_type_id'],'qualification_id'=>$doc['qualification_id'],'date_submission'=>$doc['date_submission'],'batch_no'=>$doc['batch_no'],'document_sub'=>$doc['document_sub']??null,'remarks'=>$doc['remarks']]),ENT_QUOTES) ?>'>
-                                    <i class="bi bi-pencil"></i></button>
                                 <a href="documents_tracking.php?archive_id=<?= $doc['id'] ?>" class="btn btn-action btn-outline-warning" onclick="return confirm('Archive this document?')"><i class="bi bi-archive"></i></a>
                             </div>
                         </td>
@@ -526,7 +719,7 @@ foreach($subsStmt->fetchAll() as $s){ $docSubs[(int)$s['document_type_id']][]=$s
                 <iframe id="previewIframe" style="width:100%;height:70vh;border:0;display:none"></iframe>
                 <p id="previewMsg" class="mt-2" style="display:none"></p>
             </div>
-            <div class="modal-footer"><a id="previewOpen" class="btn btn-outline-primary" target="_blank">Open</a><a id="previewDownload" class="btn btn-outline-secondary" download>Download</a><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button></div>
+            <div class="modal-footer"><button type="button" id="previewPrint" class="btn btn-outline-dark"><i class="bi bi-printer me-1"></i>Print</button><a id="previewOpen" class="btn btn-outline-primary" target="_blank">Open</a><a id="previewDownload" class="btn btn-outline-secondary" download>Download</a><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button></div>
         </div>
     </div>
 </div>
@@ -668,7 +861,7 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
          wrap(inp('date_submission','date')),
          wrap(receivedInp),
          wrap(returnedInp),
-         wrap(inp('staff_received','date')),
+         wrap(inp('staff_received','text','Staff name')),
          wrap(inp('date_assessment','date')),
          wrap(inp('assessor_name','text')),
          wrap(inp('tesda_released','date')),

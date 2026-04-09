@@ -57,6 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $sub_docs          = $_POST['row_document_sub']     ?? [];
         $batch_nos         = $_POST['batch_no']             ?? [];
         $remarks_arr       = $_POST['remarks']              ?? [];
+        $date_submissions  = $_POST['date_submission']      ?? [];
         $received_tesdas   = $_POST['received_tesda']       ?? [];
         $returned_centers  = $_POST['returned_center']      ?? [];
         $staff_receiveds   = $_POST['staff_received']       ?? [];
@@ -74,6 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $rowTotal = max(
             count($category_ids),
             count($doctype_ids),
+            count($date_submissions),
             count($batch_nos),
             count($remarks_arr),
             isset($_FILES['row_image']['name']) && is_array($_FILES['row_image']['name']) ? count($_FILES['row_image']['name']) : 0
@@ -96,6 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $sub_doc !== null ||
                     $batch !== null ||
                     $rem !== null ||
+                    ($date_submissions[$i] ?? '') !== '' ||
                     ($received_tesdas[$i] ?? '') !== '' ||
                     ($returned_centers[$i] ?? '') !== '' ||
                     ($staff_receiveds[$i] ?? '') !== '' ||
@@ -117,7 +120,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $qual_id = null;
                 }
 
-                $rowDateSubmission = $date_sub_shared ?: null;
+                $rowDateSubmission = ($date_submissions[$i] ?? '') ?: ($date_sub_shared ?: null);
 
                 $ins->execute([
                     $sid,
@@ -197,18 +200,34 @@ $recentDocuments = $recentStmt->fetchAll();
     <link rel="stylesheet" href="../assets/sidebar.css">
     <link rel="stylesheet" href="../assets/css/main.css">
     <style>
+        .theme-bigfive .add-page-wrap {
+            --required-warn: #6f8db8;
+            --required-warn-soft: #f4f8ff;
+            --required-warn-border: rgba(111, 141, 184, 0.36);
+        }
+        .theme-blossom .add-page-wrap {
+            --accent: #a45555;
+            --accent-dark: #321415;
+            --accent-mid: #6f2d2d;
+            --accent-light: #f8efef;
+            --accent-glow: rgba(164, 85, 85, 0.26);
+            --accent-gradient: linear-gradient(135deg, #321415 0%, #6f2d2d 54%, #a45555 100%);
+            --required-warn: #bc6d6d;
+            --required-warn-soft: #fff7f7;
+            --required-warn-border: rgba(188, 109, 109, 0.34);
+        }
         .add-page-wrap { max-width: 1680px; margin: 0 auto; }
-        .add-card { border: 1px solid #d8dfea; border-radius: 14px; overflow: hidden; background: #fff; box-shadow: 0 8px 28px rgba(20, 40, 90, .08); }
-        .add-card-header { background: linear-gradient(120deg, #112d58, #365f95); color: #fff; padding: 18px 22px; }
+        .add-card { border: 1px solid var(--accent-light, #d8dfea); border-radius: 14px; overflow: hidden; background: #fff; box-shadow: 0 8px 28px rgba(20, 40, 90, .08); }
+        .add-card-header { background: var(--accent-gradient, linear-gradient(120deg, #112d58, #365f95)); color: #fff; padding: 18px 22px; }
         .add-card-title { font-size: 1.45rem; margin: 0; font-weight: 700; letter-spacing: .01em; }
         .add-card-subtitle { margin: 5px 0 0; color: rgba(255, 255, 255, .75); font-size: .9rem; }
-        .prefill-banner { background: #f0f5ff; border-bottom: 1px solid #d0dbf0; padding: 14px 20px 12px; }
-        .prefill-banner-title { font-size: .72rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #5566aa; margin-bottom: 8px; }
-        .prefill-hint { font-size: .76rem; color: #6073a8; margin-top: 6px; }
+        .prefill-banner { background: var(--accent-light, #f0f5ff); border-bottom: 1px solid var(--accent-glow, #d0dbf0); padding: 14px 20px 12px; }
+        .prefill-banner-title { font-size: .72rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--accent-mid, #5566aa); margin-bottom: 8px; }
+        .prefill-hint { font-size: .76rem; color: var(--accent-mid, #6073a8); margin-top: 6px; }
         .rows-section { padding: 12px 20px 6px; }
         .rows-section-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 8px; flex-wrap: wrap; }
         .rows-section-label { font-size: .74rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #555; }
-        .rows-scroll-wrap { overflow-x: auto; overflow-y: auto; max-height: 540px; border: 1px solid #dee2e6; border-radius: 8px; }
+        .rows-scroll-wrap { overflow-x: auto; overflow-y: auto; max-height: 540px; border: 1px solid var(--accent-light, #dee2e6); border-radius: 8px; }
         #addRowsTable { min-width: 1780px; margin-bottom: 0; font-size: .79rem; }
         #addRowsTable thead th {
             font-size: .7rem;
@@ -238,16 +257,87 @@ $recentDocuments = $recentStmt->fetchAll();
         .row-num-cell { font-size: .72rem; color: #a0a0a0; text-align: center; font-variant-numeric: tabular-nums; }
         .btn-del-row { width: 23px; height: 23px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 3px; font-size: .78rem; line-height: 1; }
         #addRowsEmpty td { padding: 28px; text-align: center; color: #bbb; font-size: .83rem; }
-        .select-cat { border-color: #b8c8f0 !important; }
-        .select-dt { border-color: #b8e0d4 !important; }
-        .select-qual { border-color: #f0d8a8 !important; }
+        .required-star { color: #b45a5a; font-weight: 700; }
+        .theme-bigfive .required-star { color: #3c6cab; }
+        .select-cat,
+        .select-dt { border-color: rgba(99, 142, 203, .36) !important; }
+        .select-qual { border-color: #d9dee7 !important; }
+        .theme-blossom .select-cat,
+        .theme-blossom .select-dt {
+            border-color: rgba(164, 85, 85, .34) !important;
+            background-color: #fffafa !important;
+        }
+        .theme-blossom .select-qual {
+            border-color: #d7c8c8 !important;
+            background-color: #fff !important;
+        }
+        .theme-blossom .select-cat:focus,
+        .theme-blossom .select-dt:focus {
+            border-color: #a45555 !important;
+            box-shadow: 0 0 0 .15rem rgba(164, 85, 85, .22) !important;
+        }
         .add-page-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 12px 20px; border-top: 1px solid #dee2e6; background: #fafafa; }
-        tr.row-invalid { outline: 2px solid #dc3545; }
-        .recent-table-wrap { margin-top: 18px; border: 1px solid #d8dfea; border-radius: 12px; overflow: hidden; background: #fff; }
-        .recent-title { padding: 12px 16px; border-bottom: 1px solid #e7ecf4; background: #f7f9fd; font-weight: 700; color: #1d3359; }
+        tr.row-invalid td {
+            background: var(--required-warn-soft, #fff7f7);
+            border-top-color: var(--required-warn-border, rgba(188, 109, 109, 0.34)) !important;
+            border-bottom-color: var(--required-warn-border, rgba(188, 109, 109, 0.34)) !important;
+        }
+        tr.row-invalid td:first-child {
+            border-left: 3px solid var(--required-warn, #bc6d6d) !important;
+        }
+        tr.row-invalid td:last-child {
+            border-right: 1px solid var(--required-warn-border, rgba(188, 109, 109, 0.34)) !important;
+        }
+        .recent-table-wrap { margin-top: 18px; border: 1px solid var(--accent-light, #d8dfea); border-radius: 12px; overflow: hidden; background: #fff; }
+        .recent-title { padding: 12px 16px; border-bottom: 1px solid var(--accent-light, #e7ecf4); background: var(--accent-light, #f7f9fd); font-weight: 700; color: var(--accent-dark, #1d3359); }
         .recent-table { min-width: 1320px; margin: 0; }
         .recent-table thead th { white-space: nowrap; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
         .img-mini { width: 42px; height: 42px; object-fit: cover; border-radius: 6px; border: 1px solid #ced4da; background: #fff; }
+        .file-cell-wrap { min-width: 168px; }
+        .file-cell-wrap .form-control { height: 28px; }
+        .btn-file-preview { width: 100%; margin-top: 4px; font-size: .7rem; padding: 2px 6px; }
+        .preview-trigger { background: transparent; border: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+        .preview-trigger:focus-visible { outline: 2px solid var(--accent, #0d6efd); outline-offset: 2px; border-radius: 8px; }
+        .pdf-chip {
+            min-width: 56px;
+            height: 42px;
+            border-radius: 6px;
+            border: 1px solid #f5c2c7;
+            background: #fff5f5;
+            color: #b4232f;
+            font-size: .72rem;
+            font-weight: 700;
+            letter-spacing: .03em;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 0 8px;
+        }
+        #docPreviewModal .modal-dialog { max-width: 980px; }
+        #docPreviewViewport {
+            min-height: 62vh;
+            max-height: 74vh;
+            border: 1px solid var(--accent-light, #d9e2f0);
+            border-radius: 10px;
+            background: var(--accent-light, #f8fbff);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        #docPreviewViewport img {
+            max-width: 100%;
+            max-height: 72vh;
+            object-fit: contain;
+            display: block;
+        }
+        #docPreviewViewport iframe {
+            width: 100%;
+            height: 72vh;
+            border: 0;
+            background: #fff;
+        }
     </style>
 </head>
 <body class="<?= $themeClass ?>">
@@ -311,7 +401,7 @@ $recentDocuments = $recentStmt->fetchAll();
                             <input type="date" name="date_submission_shared" id="prefill_date" class="form-control form-control-sm">
                         </div>
                         <div class="col-md-2">
-                            <button type="button" class="btn btn-sm btn-primary w-100" id="btnApplyPrefill">
+                            <button type="button" class="btn btn-sm btn-tb5-primary w-100" id="btnApplyPrefill">
                                 <i class="bi bi-arrow-down-circle me-1"></i>Apply to All Rows
                             </button>
                         </div>
@@ -323,7 +413,7 @@ $recentDocuments = $recentStmt->fetchAll();
                     <div class="rows-section-top">
                         <span class="rows-section-label"><i class="bi bi-table me-1"></i>Document rows <span class="badge bg-secondary ms-1" id="rowCountBadge">0</span></span>
                         <div class="d-flex gap-2">
-                            <button type="button" class="btn btn-sm btn-outline-primary" id="btnAdd1"><i class="bi bi-plus-lg me-1"></i>Add Row</button>
+                            <button type="button" class="btn btn-sm btn-outline-tb5" id="btnAdd1"><i class="bi bi-plus-lg me-1"></i>Add Row</button>
                             <button type="button" class="btn btn-sm btn-outline-secondary" id="btnAdd5">+ 5 Rows</button>
                             <button type="button" class="btn btn-sm btn-outline-secondary" id="btnAdd10">+ 10 Rows</button>
                         </div>
@@ -334,8 +424,8 @@ $recentDocuments = $recentStmt->fetchAll();
                             <thead>
                             <tr>
                                 <th style="width:28px">#</th>
-                                <th style="min-width:150px">Category <span class="text-danger">*</span></th>
-                                <th style="min-width:145px">Doc Type <span class="text-danger">*</span></th>
+                                <th style="min-width:150px">Category <span class="required-star">*</span></th>
+                                <th style="min-width:145px">Doc Type <span class="required-star">*</span></th>
                                 <th style="min-width:140px">Qualification</th>
                                 <th style="min-width:165px">Sub-Document</th>
                                 <th style="min-width:130px">Batch No.</th>
@@ -410,16 +500,28 @@ $recentDocuments = $recentStmt->fetchAll();
                             <td><?= $df($doc['date_submission']) ?></td>
                             <td><?= $df($doc['received_tesda']) ?></td>
                             <td><?= $df($doc['returned_center']) ?></td>
-                            <td><?= $df($doc['staff_received']) ?></td>
+                            <td><?= $dv($doc['staff_received']) ?: '—' ?></td>
                             <td><?= $df($doc['date_assessment']) ?></td>
                             <td><?= $dv($doc['assessor_name']) ?: '—' ?></td>
                             <td><?= $df($doc['tesda_released']) ?></td>
                             <td><?= $dv($doc['remarks']) ?: '—' ?></td>
                             <td>
-                                <?php if (!empty($doc['image_path'])): ?>
-                                    <a href="../<?= htmlspecialchars($doc['image_path']) ?>" target="_blank" rel="noopener">
-                                        <img src="../<?= htmlspecialchars($doc['image_path']) ?>" alt="doc" class="img-mini" onerror="this.style.display='none'">
-                                    </a>
+                                <?php if (!empty($doc['image_path'])):
+                                    $isPdf = strtolower(pathinfo((string)$doc['image_path'], PATHINFO_EXTENSION)) === 'pdf';
+                                ?>
+                                    <button
+                                        type="button"
+                                        class="preview-trigger js-preview-doc"
+                                        data-preview-url="../<?= htmlspecialchars($doc['image_path']) ?>"
+                                        data-preview-type="<?= $isPdf ? 'pdf' : 'image' ?>"
+                                        title="Preview file"
+                                    >
+                                        <?php if ($isPdf): ?>
+                                            <span class="pdf-chip"><i class="bi bi-file-earmark-pdf"></i>PDF</span>
+                                        <?php else: ?>
+                                            <img src="../<?= htmlspecialchars($doc['image_path']) ?>" alt="doc" class="img-mini" onerror="this.style.display='none'">
+                                        <?php endif; ?>
+                                    </button>
                                 <?php else: ?>
                                     <span class="text-muted">—</span>
                                 <?php endif; ?>
@@ -434,6 +536,27 @@ $recentDocuments = $recentStmt->fetchAll();
     </div>
 </main>
 
+<div class="modal fade" id="docPreviewModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-file-earmark-richtext me-2"></i>Document Preview</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="docPreviewViewport">
+                    <div id="docPreviewPlaceholder" class="text-muted">No preview available.</div>
+                    <img id="docPreviewImage" class="d-none" alt="Preview">
+                    <iframe id="docPreviewFrame" class="d-none" title="Document preview"></iframe>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 const DT_BY_CAT = <?= json_encode($dtByCat, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>;
@@ -444,6 +567,40 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
 
 (function(){
     let rowSeq = 0;
+    let currentPreviewUrl = '';
+
+    function detectPreviewType(url, kindHint) {
+        if (kindHint === 'pdf' || kindHint === 'application/pdf') return 'pdf';
+        if (kindHint && kindHint.startsWith('image/')) return 'image';
+        return /\.pdf(?:$|[?#])/i.test(url || '') ? 'pdf' : 'image';
+    }
+
+    function openPreview(url, kindHint) {
+        if (!url) return;
+
+        const kind = detectPreviewType(url, kindHint || '');
+        const modalEl = document.getElementById('docPreviewModal');
+        const placeholder = document.getElementById('docPreviewPlaceholder');
+        const img = document.getElementById('docPreviewImage');
+        const frame = document.getElementById('docPreviewFrame');
+
+        currentPreviewUrl = url;
+        placeholder.classList.add('d-none');
+        img.classList.add('d-none');
+        frame.classList.add('d-none');
+        img.removeAttribute('src');
+        frame.removeAttribute('src');
+
+        if (kind === 'pdf') {
+            frame.src = url;
+            frame.classList.remove('d-none');
+        } else {
+            img.src = url;
+            img.classList.remove('d-none');
+        }
+
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    }
 
     function fillDtSelect(sel, catId, selectedVal) {
         const list = (catId && DT_BY_CAT[catId]) ? DT_BY_CAT[catId] : DT_ALL;
@@ -518,16 +675,47 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             return el;
         };
 
+        const dateSub = inp('date_submission', 'date');
+        if (def.dateSubmission) dateSub.value = def.dateSubmission;
+
+        const receivedInp = inp('received_tesda', 'date');
+        const returnedInp = inp('returned_center', 'date');
+        const syncSubmittedToReceived = () => { receivedInp.value = dateSub.value || ''; };
+        dateSub.addEventListener('change', syncSubmittedToReceived);
+        if (dateSub.value) syncSubmittedToReceived();
+
         const imgInp = document.createElement('input');
         imgInp.type = 'file';
         imgInp.name = 'row_image[]';
         imgInp.className = 'form-control form-control-sm';
         imgInp.accept = 'image/*,.pdf';
 
-        const receivedInp = inp('received_tesda', 'date');
-        const returnedInp = inp('returned_center', 'date');
-        receivedInp.addEventListener('change', function(){ returnedInp.value = this.value; });
-        returnedInp.addEventListener('change', function(){ receivedInp.value = this.value; });
+        const previewBtn = document.createElement('button');
+        previewBtn.type = 'button';
+        previewBtn.className = 'btn btn-outline-primary btn-file-preview js-row-preview';
+        previewBtn.innerHTML = '<i class="bi bi-eye me-1"></i>Preview';
+        previewBtn.disabled = true;
+
+        imgInp.addEventListener('change', function(){
+            if (this.dataset.previewUrl) {
+                URL.revokeObjectURL(this.dataset.previewUrl);
+                delete this.dataset.previewUrl;
+            }
+
+            const file = this.files && this.files[0] ? this.files[0] : null;
+            if (!file) {
+                previewBtn.disabled = true;
+                return;
+            }
+
+            this.dataset.previewUrl = URL.createObjectURL(file);
+            previewBtn.disabled = false;
+        });
+
+        const fileWrap = document.createElement('div');
+        fileWrap.className = 'file-cell-wrap';
+        fileWrap.appendChild(imgInp);
+        fileWrap.appendChild(previewBtn);
 
         const del = document.createElement('button');
         del.type = 'button';
@@ -551,9 +739,6 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             return td;
         };
 
-        const dateSub = inp('date_submission', 'date');
-        if (def.dateSubmission) dateSub.value = def.dateSubmission;
-
         [
             numTd,
             wrap(catSel),
@@ -564,12 +749,12 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             wrap(dateSub),
             wrap(receivedInp),
             wrap(returnedInp),
-            wrap(inp('staff_received', 'date')),
+            wrap(inp('staff_received', 'text', 'Staff name')),
             wrap(inp('date_assessment', 'date')),
             wrap(inp('assessor_name', 'text')),
             wrap(inp('tesda_released', 'date')),
             wrap(remarksSel),
-            wrap(imgInp),
+            wrap(fileWrap),
             wrap(del)
         ].forEach(td => tr.appendChild(td));
 
@@ -586,6 +771,15 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         const n = document.querySelectorAll('#addRowsTbody tr:not(#addRowsEmpty)').length;
         document.getElementById('rowCountBadge').textContent = n;
         document.getElementById('saveCountLabel').textContent = n > 0 ? `${n} row${n !== 1 ? 's' : ''} queued` : '';
+    }
+
+    function cleanupRowPreviewUrls(root) {
+        (root || document).querySelectorAll('input[name="row_image[]"]').forEach(inp => {
+            if (inp.dataset.previewUrl) {
+                URL.revokeObjectURL(inp.dataset.previewUrl);
+                delete inp.dataset.previewUrl;
+            }
+        });
     }
 
     function showEmpty() {
@@ -630,17 +824,22 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             const dtSel = tr.querySelector('[name="row_document_type_id[]"]');
             const qualSel = tr.querySelector('[name="row_qualification_id[]"]');
             const dateSub = tr.querySelector('[name="date_submission[]"]');
+            const receivedInp = tr.querySelector('[name="received_tesda[]"]');
 
             if (catSel && dtSel) {
                 catSel.value = p.catId;
                 fillDtSelect(dtSel, p.catId, p.dtId);
             }
             if (qualSel) qualSel.value = p.qualId;
-            if (dateSub) dateSub.value = p.dateSubmission || '';
+            if (dateSub) {
+                dateSub.value = p.dateSubmission || '';
+                if (receivedInp) receivedInp.value = dateSub.value;
+            }
         });
     }
 
     function resetFormRows() {
+        cleanupRowPreviewUrls(document.getElementById('addRowsTbody'));
         rowSeq = 0;
         showEmpty();
         document.getElementById('prefill_category').value = '';
@@ -650,8 +849,28 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
     }
 
     document.addEventListener('DOMContentLoaded', function(){
+        const previewModalEl = document.getElementById('docPreviewModal');
+        const previewImg = document.getElementById('docPreviewImage');
+        const previewFrame = document.getElementById('docPreviewFrame');
+        const previewPlaceholder = document.getElementById('docPreviewPlaceholder');
+
         document.getElementById('prefill_category').addEventListener('change', function(){
             fillDtSelect(document.getElementById('prefill_doctype'), this.value, '');
+        });
+
+        previewModalEl.addEventListener('hidden.bs.modal', function(){
+            currentPreviewUrl = '';
+            previewImg.classList.add('d-none');
+            previewFrame.classList.add('d-none');
+            previewImg.removeAttribute('src');
+            previewFrame.removeAttribute('src');
+            previewPlaceholder.classList.remove('d-none');
+        });
+
+        document.addEventListener('click', function(e){
+            const trigger = e.target.closest('.js-preview-doc');
+            if (!trigger) return;
+            openPreview(trigger.dataset.previewUrl || '', trigger.dataset.previewType || '');
         });
 
         document.getElementById('btnApplyPrefill').addEventListener('click', applyPrefillToAll);
@@ -663,9 +882,26 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         });
 
         document.getElementById('addRowsTbody').addEventListener('click', function(e){
+            const previewBtn = e.target.closest('.js-row-preview');
+            if (previewBtn) {
+                const row = previewBtn.closest('tr');
+                const fileInput = row ? row.querySelector('input[name="row_image[]"]') : null;
+                const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+                if (!fileInput || !file) return;
+
+                if (!fileInput.dataset.previewUrl) {
+                    fileInput.dataset.previewUrl = URL.createObjectURL(file);
+                }
+                openPreview(fileInput.dataset.previewUrl, file.type || '');
+                return;
+            }
+
             const btn = e.target.closest('.btn-del-row');
             if (!btn) return;
-            btn.closest('tr').remove();
+            const row = btn.closest('tr');
+            if (!row) return;
+            cleanupRowPreviewUrls(row);
+            row.remove();
             reindex();
             syncCount();
             if (!document.querySelector('#addRowsTbody tr:not(#addRowsEmpty)')) showEmpty();
@@ -693,8 +929,12 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
 
             if (bad) {
                 e.preventDefault();
-                alert('Rows highlighted in red are missing a Category or Document Type.');
+                alert('Highlighted rows are missing a Category or Document Type.');
             }
+        });
+
+        window.addEventListener('beforeunload', function(){
+            cleanupRowPreviewUrls(document.getElementById('addRowsTbody'));
         });
 
         addRows(1);

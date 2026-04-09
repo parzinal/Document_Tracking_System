@@ -110,8 +110,8 @@
             <input type="date" name="received_tesda" class="doc-form-control">
         </div>
         <div class="col-md-4 col-sm-6 doc-field-wrap">
-            <label class="doc-form-label">Staff Received (date)</label>
-            <input type="date" name="staff_received" class="doc-form-control">
+            <label class="doc-form-label">Staff Received</label>
+            <input type="text" name="staff_received" class="doc-form-control" placeholder="Staff name">
         </div>
         <div class="col-md-4 col-sm-6 doc-field-wrap">
             <label class="doc-form-label">Date of Assessment</label>

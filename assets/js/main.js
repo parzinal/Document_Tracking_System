@@ -134,11 +134,203 @@ document.addEventListener('DOMContentLoaded', function () {
     // ---------------------------------------------------
     // 6. Print button
     // ---------------------------------------------------
-    document.getElementById('printBtn')?.addEventListener('click', () => window.print());
+    document.getElementById('printBtn')?.addEventListener('click', function () {
+        const table = document.getElementById('documentsTable');
+        if (!table) {
+            window.print();
+            return;
+        }
+
+        const clone = table.cloneNode(false);
+        const head = table.querySelector('thead');
+        if (head) clone.appendChild(head.cloneNode(true));
+
+        const body = document.createElement('tbody');
+        let sourceRows = Array.from(table.querySelectorAll('tbody tr'));
+        if (dtInstance && typeof dtInstance.rows === 'function') {
+            sourceRows = Array.from(dtInstance.rows({ search: 'applied' }).nodes());
+        }
+        sourceRows.forEach(function (tr) {
+            body.appendChild(tr.cloneNode(true));
+        });
+        clone.appendChild(body);
+
+        // Remove no-print columns and checkbox selector column.
+        clone.querySelectorAll('tr').forEach(function (row) {
+            row.querySelectorAll('.no-print').forEach(function (el) { el.remove(); });
+            const firstCell = row.children[0];
+            if (firstCell && firstCell.querySelector('input[type="checkbox"]')) {
+                firstCell.remove();
+            }
+        });
+
+        clone.querySelectorAll('img').forEach(function (img) {
+            const src = img.getAttribute('src') || img.src;
+            img.src = new URL(src, window.location.href).href;
+            img.style.width = '52px';
+            img.style.height = '52px';
+            img.style.objectFit = 'cover';
+            img.style.borderRadius = '6px';
+        });
+
+        const pageTitle = document.querySelector('.page-title')?.textContent?.trim() || 'Documents Tracking';
+        const printHtml = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+    <title></title>
+<style>
+    @page{margin:0}
+    html,body{margin:0;padding:0;background:#fff}
+    body{font-family:Segoe UI,Arial,sans-serif;color:#111;padding:18px}
+h1{font-size:20px;margin:0 0 4px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{border:1px solid #cfd6df;padding:6px 8px;vertical-align:middle;text-align:left}
+th{background:#eef3fb;font-weight:700;white-space:nowrap}
+.empty-cell{color:#888}
+</style>
+</head>
+<body>
+<h1>${escHtml(pageTitle)}</h1>
+${clone.outerHTML}
+</body>
+</html>`;
+
+        let printFrame = document.getElementById('tablePrintFrame');
+        if (!printFrame) {
+            printFrame = document.createElement('iframe');
+            printFrame.id = 'tablePrintFrame';
+            printFrame.style.position = 'fixed';
+            printFrame.style.right = '0';
+            printFrame.style.bottom = '0';
+            printFrame.style.width = '0';
+            printFrame.style.height = '0';
+            printFrame.style.border = '0';
+            document.body.appendChild(printFrame);
+        }
+
+        const printBlob = new Blob([printHtml], { type: 'text/html' });
+        const printBlobUrl = URL.createObjectURL(printBlob);
+
+        printFrame.onload = function () {
+            try {
+                printFrame.contentWindow.focus();
+                printFrame.contentWindow.print();
+            } catch (err) {
+                showToast('Unable to print. Please try again.', 'danger');
+            } finally {
+                setTimeout(function () { URL.revokeObjectURL(printBlobUrl); }, 1200);
+            }
+        };
+        printFrame.src = printBlobUrl;
+    });
 
     // ---------------------------------------------------
     // 7. Image thumbnails → preview modal
     // ---------------------------------------------------
+    const previewPrintBtn = document.getElementById('previewPrint');
+    if (previewPrintBtn) {
+        previewPrintBtn.addEventListener('click', function () {
+            const modal = document.getElementById('imagePreviewModal');
+            if (!modal) return;
+
+            const openLink = modal.querySelector('#previewOpen');
+            const previewIframe = modal.querySelector('#previewIframe');
+            const previewImg = modal.querySelector('#previewImg');
+
+            let targetUrl = '';
+            let isPdf = false;
+            if (previewIframe && previewIframe.src && previewIframe.style.display !== 'none') {
+                targetUrl = previewIframe.src;
+                isPdf = true;
+            } else if (previewImg && previewImg.src && previewImg.style.display !== 'none') {
+                targetUrl = previewImg.currentSrc || previewImg.src;
+            } else if (openLink && openLink.getAttribute('href') && !openLink.classList.contains('disabled')) {
+                targetUrl = openLink.getAttribute('href');
+                isPdf = /\.pdf(?:$|[?#])/i.test(targetUrl);
+            }
+
+            if (!targetUrl) {
+                showToast('No preview file to print.', 'warning');
+                return;
+            }
+
+            if (isPdf) {
+                const cacheBustedUrl = targetUrl + (targetUrl.includes('?') ? '&' : '?') + 'print=' + Date.now();
+                const pdfWin = window.open(cacheBustedUrl, '_blank');
+                if (!pdfWin) {
+                    showToast('Allow pop-ups to print PDF preview.', 'warning');
+                    return;
+                }
+
+                const tryPdfPrint = function () {
+                    try {
+                        pdfWin.focus();
+                        pdfWin.print();
+                    } catch (err) {
+                        // Ignore and retry once for slow PDF viewers.
+                    }
+                };
+
+                setTimeout(tryPdfPrint, 500);
+                setTimeout(tryPdfPrint, 1400);
+                return;
+            }
+
+            const safeImgUrl = String(targetUrl)
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+
+            const printWin = window.open('', '_blank');
+            if (!printWin) {
+                showToast('Allow pop-ups to print image preview.', 'warning');
+                return;
+            }
+
+            const imagePrintHtml = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title></title>
+<style>
+@page{margin:0}
+html,body{margin:0;padding:0;background:#fff}
+body{display:flex;align-items:center;justify-content:center;min-height:100vh}
+img{max-width:100%;max-height:100vh;object-fit:contain}
+</style>
+</head>
+<body>
+<img id="printImage" src="${safeImgUrl}" alt="Preview">
+<script>
+  (function(){
+        try { document.title = ''; } catch (e) {}
+    var img = document.getElementById('printImage');
+    var printed = false;
+    function doPrint(){
+      if (printed) return;
+      printed = true;
+      try { window.focus(); window.print(); } catch (e) {}
+    }
+    if (img.complete) {
+      setTimeout(doPrint, 100);
+    } else {
+      img.onload = function(){ setTimeout(doPrint, 80); };
+      img.onerror = function(){ setTimeout(doPrint, 80); };
+    }
+    window.onafterprint = function(){ setTimeout(function(){ window.close(); }, 120); };
+  })();
+</script>
+</body>
+</html>`;
+
+            printWin.document.open();
+            printWin.document.write(imagePrintHtml);
+            printWin.document.close();
+        });
+    }
+
     document.querySelectorAll('.doc-thumb').forEach(function (img) {
         img.addEventListener('click', function () {
             const modal = document.getElementById('imagePreviewModal');

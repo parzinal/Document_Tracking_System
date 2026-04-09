@@ -6,6 +6,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
 $navItems = [
     ['file' => 'dashboard.php',           'icon' => 'bi-speedometer2',  'label' => 'Dashboard'],
     ['file' => 'documents_tracking.php',  'icon' => 'bi-file-earmark-text', 'label' => 'Documents Tracking'],
+    ['file' => 'add_documents.php',       'icon' => 'bi-file-earmark-plus', 'label' => 'Add Documents'],
     ['file' => 'archives.php',            'icon' => 'bi-archive',        'label' => 'Archives'],
     ['file' => 'add_data.php',            'icon' => 'bi-plus-circle',    'label' => 'Add Data'],
     ['file' => 'usermanage.php',          'icon' => 'bi-people',         'label' => 'User Management'],

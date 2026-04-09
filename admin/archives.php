@@ -27,13 +27,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $ids = array_map('intval', $_POST['selected_ids'] ?? []);
         if ($ids) {
             // Delete uploaded files first
-            $ph    = implode(',', array_fill(0, count($ids), '?'));
-            $rows  = $pdo->prepare("SELECT image_path FROM documents WHERE id IN ($ph) AND system_id=?")
-                         ->execute(array_merge($ids, [$sid]));
-            // fetch paths and delete files
-            $fRows = $pdo->prepare("SELECT image_path FROM documents WHERE id IN ($ph) AND system_id=?")
-                         ->execute(array_merge($ids, [$sid]));
-            foreach ($pdo->query("SELECT image_path FROM documents WHERE id IN ($ph)") as $r) {
+            $ph = implode(',', array_fill(0, count($ids), '?'));
+            $sel = $pdo->prepare("SELECT image_path FROM documents WHERE id IN ($ph) AND system_id=?");
+            $sel->execute(array_merge($ids, [$sid]));
+            foreach ($sel->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 if ($r['image_path'] && file_exists(__DIR__ . '/../' . $r['image_path'])) {
                     unlink(__DIR__ . '/../' . $r['image_path']);
                 }
@@ -200,7 +197,7 @@ $qualifications= $pdo->prepare('SELECT * FROM qualifications  WHERE system_id=? 
                                 <td><?= $doc['date_submission'] ? date('m/d/Y', strtotime($doc['date_submission'])) : '' ?></td>
                                 <td><?= $doc['received_tesda']  ? date('m/d/Y', strtotime($doc['received_tesda']))  : '' ?></td>
                                 <td><?= $doc['returned_center'] ? date('m/d/Y', strtotime($doc['returned_center'])) : '' ?></td>
-                                <td><?= $doc['staff_received'] ? date('m/d/Y', strtotime($doc['staff_received'])) : '' ?></td>
+                                <td><?= htmlspecialchars($doc['staff_received'] ?? '') ?></td>
                                 <td><?= $doc['date_assessment'] ? date('m/d/Y', strtotime($doc['date_assessment'])) : '' ?></td>
                                 <td><?= htmlspecialchars($doc['assessor_name']  ?? '') ?></td>
                                 <td><?= $doc['tesda_released']  ? date('m/d/Y', strtotime($doc['tesda_released']))  : '' ?></td>
