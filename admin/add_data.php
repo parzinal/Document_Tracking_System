@@ -220,7 +220,10 @@ foreach ($tables as $key => $label) {
         <div class="card-body">
             <h6 class="mb-3">Add Category → Document Type → Sub-Documents (one form)</h6>
             <div class="mb-3">
-                <form method="POST" onsubmit="return confirm('Seed default mapping? This will add categories, document types and sub-documents if they do not already exist.');">
+                <form method="POST"
+                        data-confirm-message="Seed default mapping? This will add categories, document types and sub-documents if they do not already exist."
+                        data-confirm-text="Seed"
+                        data-confirm-class="btn btn-warning">
                     <input type="hidden" name="action" value="seed_default_mapping">
                     <button type="submit" class="btn btn-outline-secondary btn-sm">Seed Default Mapping</button>
                 </form>
@@ -245,7 +248,7 @@ foreach ($tables as $key => $label) {
                     <input type="text" name="doc_type_name" class="form-control" placeholder="Document Type name" required>
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label">Qualification (billing only)</label>
+                    <label class="form-label">Qualification</label>
                     <select name="doc_qualification_id" id="map_qualification" class="form-select">
                         <option value="">— Select Qualification —</option>
                         <?php foreach ($data['qualifications'] as $q): ?>
@@ -266,22 +269,10 @@ foreach ($tables as $key => $label) {
 
         <script>
         (function(){
-            const existSel = document.querySelector('select[name="category_existing"]');
-            const newInput = document.querySelector('input[name="category_new"]');
             const qualSel  = document.getElementById('map_qualification');
-            if (!qualSel) return;
-            function updateQual() {
-                const ex = existSel ? (existSel.options[existSel.selectedIndex]?.text || '') : '';
-                const nw = newInput ? (newInput.value || '') : '';
-                const target = (ex || nw).toLowerCase();
-                const enabled = /billing/i.test(target);
-                qualSel.disabled = !enabled;
-                if (!enabled) qualSel.value = '';
+            if (qualSel) {
+                qualSel.disabled = false;
             }
-            if (existSel) existSel.addEventListener('change', updateQual);
-            if (newInput) newInput.addEventListener('input', updateQual);
-            // init
-            updateQual();
         })();
         </script>
 
@@ -348,7 +339,9 @@ foreach ($tables as $key => $label) {
                                         </button>
                                         <!-- Delete -->
                                         <form method="POST" class="d-inline"
-                                              onsubmit="return confirm('Delete this <?= strtolower($label) ?>? Documents using it will lose this link.')">
+                                                data-confirm-message="Delete this <?= strtolower($label) ?>? Documents using it will lose this link."
+                                                data-confirm-text="Delete"
+                                                data-confirm-class="btn btn-danger">
                                             <input type="hidden" name="action"    value="delete">
                                             <input type="hidden" name="table_key" value="<?= $key ?>">
                                             <input type="hidden" name="item_id"   value="<?= $row['id'] ?>">

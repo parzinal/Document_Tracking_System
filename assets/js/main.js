@@ -125,9 +125,13 @@ document.addEventListener('DOMContentLoaded', function () {
             if (checked === 0) {
                 showToast('Select at least one row first.', 'warning'); return;
             }
-            if (confirm(`Archive ${checked} selected document(s)?`)) {
-                document.getElementById('bulkForm')?.submit();
-            }
+            showConfirmModal(`Archive ${checked} selected document(s)?`, {
+                title: 'Archive Documents',
+                confirmText: 'Archive',
+                confirmClass: 'btn btn-warning'
+            }).then(function (ok) {
+                if (ok) document.getElementById('bulkForm')?.submit();
+            });
         });
     }
 
@@ -136,6 +140,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // ---------------------------------------------------
     document.getElementById('printBtn')?.addEventListener('click', function () {
         const table = document.getElementById('documentsTable');
+        const includeSignature = this.dataset.printSignature === '1';
         if (!table) {
             window.print();
             return;
@@ -174,6 +179,11 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         const pageTitle = document.querySelector('.page-title')?.textContent?.trim() || 'Documents Tracking';
+        const signatureBlock = includeSignature ? `
+<div class="print-signature-wrap">
+    <div class="print-signature-line"></div>
+    <div class="print-signature-label">Signature over Printed Name</div>
+</div>` : '';
         const printHtml = `<!doctype html>
 <html>
 <head>
@@ -188,11 +198,15 @@ table{width:100%;border-collapse:collapse;font-size:12px}
 th,td{border:1px solid #cfd6df;padding:6px 8px;vertical-align:middle;text-align:left}
 th{background:#eef3fb;font-weight:700;white-space:nowrap}
 .empty-cell{color:#888}
+.print-signature-wrap{margin-top:34px;page-break-inside:avoid}
+.print-signature-line{border-top:1px solid #111;max-width:280px;height:30px}
+.print-signature-label{font-size:12px;font-weight:600;letter-spacing:.01em}
 </style>
 </head>
 <body>
 <h1>${escHtml(pageTitle)}</h1>
 ${clone.outerHTML}
+${signatureBlock}
 </body>
 </html>`;
 
@@ -789,7 +803,144 @@ img{max-width:100%;max-height:100vh;object-fit:contain}
     };
 
     // ---------------------------------------------------
-    // 12. add_data.php: openEditModal helper
+    // 12. Utility: system confirmation modal
+    // ---------------------------------------------------
+    let confirmPendingResolve = null;
+
+    function ensureConfirmModal() {
+        let modalEl = document.getElementById('tb5ConfirmModal');
+        if (modalEl) return modalEl;
+
+        modalEl = document.createElement('div');
+        modalEl.id = 'tb5ConfirmModal';
+        modalEl.className = 'modal fade';
+        modalEl.tabIndex = -1;
+        modalEl.setAttribute('aria-hidden', 'true');
+        modalEl.innerHTML =
+            '<div class="modal-dialog modal-dialog-centered modal-md">' +
+                '<div class="modal-content">' +
+                    '<div class="modal-header">' +
+                        '<h5 class="modal-title text-white" id="tb5ConfirmTitle"><i class="bi bi-question-circle me-2"></i>Please Confirm</h5>' +
+                        '<button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>' +
+                    '</div>' +
+                    '<div class="modal-body px-4 py-4">' +
+                        '<p class="mb-0 fs-5" id="tb5ConfirmMessage"></p>' +
+                    '</div>' +
+                    '<div class="modal-footer px-4 py-3">' +
+                        '<button type="button" class="btn btn-outline-secondary btn-lg px-4" id="tb5ConfirmCancel" data-bs-dismiss="modal">Cancel</button>' +
+                        '<button type="button" class="btn btn-tb5-primary btn-lg px-4" id="tb5ConfirmOk">Confirm</button>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+
+        document.body.appendChild(modalEl);
+
+        modalEl.addEventListener('hidden.bs.modal', function () {
+            if (confirmPendingResolve) {
+                const resolve = confirmPendingResolve;
+                confirmPendingResolve = null;
+                resolve(false);
+            }
+        });
+
+        return modalEl;
+    }
+
+    window.showConfirmModal = function (message, options) {
+        const opts = Object.assign({
+            title: 'Please Confirm',
+            confirmText: 'Confirm',
+            cancelText: 'Cancel',
+            confirmClass: 'btn btn-tb5-primary',
+        }, options || {});
+
+        const modalEl = ensureConfirmModal();
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        const titleEl = modalEl.querySelector('#tb5ConfirmTitle');
+        const msgEl = modalEl.querySelector('#tb5ConfirmMessage');
+        const okBtn = modalEl.querySelector('#tb5ConfirmOk');
+        const cancelBtn = modalEl.querySelector('#tb5ConfirmCancel');
+
+        if (titleEl) titleEl.textContent = opts.title;
+        if (msgEl) msgEl.textContent = String(message || 'Are you sure?');
+        if (okBtn) {
+            okBtn.textContent = opts.confirmText;
+            okBtn.className = `${opts.confirmClass} btn-lg px-4`;
+        }
+        if (cancelBtn) {
+            cancelBtn.textContent = opts.cancelText;
+            cancelBtn.className = 'btn btn-outline-secondary btn-lg px-4';
+        }
+
+        return new Promise(function (resolve) {
+            if (confirmPendingResolve) {
+                confirmPendingResolve(false);
+                confirmPendingResolve = null;
+            }
+
+            confirmPendingResolve = resolve;
+
+            function onConfirmClick() {
+                if (!confirmPendingResolve) return;
+                const done = confirmPendingResolve;
+                confirmPendingResolve = null;
+                done(true);
+                modal.hide();
+            }
+
+            if (okBtn) {
+                okBtn.onclick = onConfirmClick;
+            }
+
+            modal.show();
+        });
+    };
+
+    // Confirm-enabled forms and links can declare a message with data-confirm-message.
+    document.querySelectorAll('form[data-confirm-message]').forEach(function (form) {
+        form.addEventListener('submit', function (event) {
+            if (form.dataset.confirmed === '1') {
+                form.dataset.confirmed = '';
+                return;
+            }
+
+            event.preventDefault();
+            const msg = form.dataset.confirmMessage || 'Are you sure?';
+            const confirmText = form.dataset.confirmText || 'Confirm';
+            const confirmClass = form.dataset.confirmClass || 'btn btn-tb5-primary';
+
+            showConfirmModal(msg, {
+                confirmText: confirmText,
+                confirmClass: confirmClass,
+            }).then(function (ok) {
+                if (!ok) return;
+                form.dataset.confirmed = '1';
+                form.submit();
+            });
+        });
+    });
+
+    document.addEventListener('click', function (event) {
+        const link = event.target.closest('a[data-confirm-message]');
+        if (!link) return;
+
+        event.preventDefault();
+        const msg = link.dataset.confirmMessage || 'Are you sure?';
+        const confirmText = link.dataset.confirmText || 'Confirm';
+        const confirmClass = link.dataset.confirmClass || 'btn btn-tb5-primary';
+
+        showConfirmModal(msg, {
+            confirmText: confirmText,
+            confirmClass: confirmClass,
+        }).then(function (ok) {
+            if (ok) {
+                window.location.href = link.href;
+            }
+        });
+    });
+
+    // ---------------------------------------------------
+    // 13. add_data.php: openEditModal helper
     // ---------------------------------------------------
     window.openEditModal = function (tableKey, itemId, name) {
         const el = document.getElementById('editItemModal');
@@ -801,7 +952,7 @@ img{max-width:100%;max-height:100vh;object-fit:contain}
     };
 
     // ---------------------------------------------------
-    // 13. usermanage.php: openEditUser helper
+    // 14. usermanage.php: openEditUser helper
     // ---------------------------------------------------
     window.openEditUser = function (u) {
         const el = document.getElementById('editUserModal');

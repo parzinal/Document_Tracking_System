@@ -8,10 +8,6 @@ $sid = (int)$_SESSION['active_system_id'];
 $flash     = '';
 $flashType = 'success';
 
-$billCatsStmt = $pdo->prepare("SELECT id FROM categories WHERE system_id=? AND LOWER(name) LIKE ?");
-$billCatsStmt->execute([$sid, '%billing%']);
-$billingCatIds = $billCatsStmt->fetchAll(PDO::FETCH_COLUMN);
-
 function handleUpload(): ?string {
     if (empty($_FILES['doc_image']['name'])) return null;
     $allowed = ['image/jpeg','image/png','image/gif','image/webp','application/pdf'];
@@ -68,7 +64,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $dt_id   = intval($doctype_ids[$i]        ?? 0) ?: null;
             $qual_id = intval($qualification_ids[$i]  ?? 0) ?: null;
             $sub_doc = isset($sub_docs[$i]) ? trim($sub_docs[$i]) ?: null : null;
-            if (!in_array($cat_id, $billingCatIds, true)) $qual_id = null;
             $ins->execute([$sid,$cat_id,$dt_id,$sub_doc,$qual_id,$date_sub_shared,$batch,$rem,
                 $received_tesdas[$i]  ?: null, $returned_centers[$i] ?: null,
                 ($staff_receiveds[$i] ?? '') ?: null, $date_assessments[$i] ?: null,
@@ -88,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 date_submission=?,batch_no=?,remarks=?,updated_at=NOW() WHERE id=? AND system_id=?')
             ->execute([$catId, intval($_POST['document_type_id']) ?: null,
                 trim($_POST['document_sub'] ?? '') ?: null,
-                (in_array($catId,$billingCatIds,true) ? (intval($_POST['qualification_id']) ?: null) : null),
+                (intval($_POST['qualification_id']) ?: null),
                 $_POST['date_submission'] ?: null,
                 trim($_POST['batch_no'] ?? '') ?: null,
                 normalizeRemark($_POST['remarks'] ?? null),
@@ -456,7 +451,7 @@ foreach($subsStmt->fetchAll() as $s){ $docSubs[(int)$s['document_type_id']][]=$s
         </form>
         <div class="dt-toolbar-actions no-print">
             <button type="button" class="btn btn-modern btn-warning" id="bulkArchiveBtn"><i class="bi bi-archive"></i>Archive</button>
-            <button type="button" class="btn btn-modern btn-secondary" id="printBtn"><i class="bi bi-printer"></i>Print</button>
+            <button type="button" class="btn btn-modern btn-secondary" id="printBtn" data-print-signature="1"><i class="bi bi-printer"></i>Print</button>
         </div>
     </div>
 
@@ -522,7 +517,11 @@ foreach($subsStmt->fetchAll() as $s){ $docSubs[(int)$s['document_type_id']][]=$s
                         </td>
                         <td class="td-actions no-print">
                             <div class="d-flex gap-1 justify-content-center">
-                                <a href="documents_tracking.php?archive_id=<?= $doc['id'] ?>" class="btn btn-action btn-outline-warning" onclick="return confirm('Archive this document?')"><i class="bi bi-archive"></i></a>
+                                <a href="documents_tracking.php?archive_id=<?= $doc['id'] ?>"
+                                   class="btn btn-action btn-outline-warning"
+                                   data-confirm-message="Archive this document?"
+                                   data-confirm-text="Archive"
+                                   data-confirm-class="btn btn-warning"><i class="bi bi-archive"></i></a>
                             </div>
                         </td>
                     </tr>
@@ -946,7 +945,15 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         document.getElementById('btnAdd1').addEventListener('click',  ()=>addRows(1,  getPrefill()));
         document.getElementById('btnAdd5').addEventListener('click',  ()=>addRows(5,  getPrefill()));
         document.getElementById('btnAdd10').addEventListener('click', ()=>addRows(10, getPrefill()));
-        document.getElementById('btnClearRows').addEventListener('click', ()=>{ if(confirm('Clear all rows?')) resetModal(); });
+        document.getElementById('btnClearRows').addEventListener('click', function () {
+            showConfirmModal('Clear all rows?', {
+                title: 'Clear Rows',
+                confirmText: 'Clear',
+                confirmClass: 'btn btn-danger'
+            }).then(function (ok) {
+                if (ok) resetModal();
+            });
+        });
 
         document.getElementById('addRowsTbody').addEventListener('click', function(e){
             const btn = e.target.closest('.btn-del-row');
@@ -962,7 +969,11 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
 
         document.getElementById('addMultipleForm').addEventListener('submit', function(e){
             const rows = document.querySelectorAll('#addRowsTbody tr:not(#addRowsEmpty)');
-            if (rows.length===0){ e.preventDefault(); alert('Add at least one row before saving.'); return; }
+            if (rows.length===0){
+                e.preventDefault();
+                showToast('Add at least one row before saving.', 'warning');
+                return;
+            }
             let bad = false;
             rows.forEach(tr=>{
                 const cat = tr.querySelector('[name="row_category_id[]"]').value;
@@ -970,7 +981,10 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
                 if (!cat||!dt){ tr.classList.add('row-invalid'); bad=true; }
                 else tr.classList.remove('row-invalid');
             });
-            if (bad){ e.preventDefault(); alert('Rows highlighted in red are missing a Category or Document Type.'); }
+            if (bad){
+                e.preventDefault();
+                showToast('Rows highlighted in red are missing a Category or Document Type.', 'warning');
+            }
         });
     });
 })();

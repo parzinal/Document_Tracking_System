@@ -139,8 +139,10 @@ $users = $pdo->query('SELECT id,username,email,role,created_at FROM users ORDER 
                                     <i class="bi bi-pencil"></i>
                                 </button>
                                 <?php if ((int)$u['id'] !== (int)$_SESSION['user_id']): ?>
-                                <form method="POST" class="d-inline"
-                                      onsubmit="return confirm('Delete user <?= htmlspecialchars(addslashes($u['username'])) ?>?')">
+                                  <form method="POST" class="d-inline"
+                                      data-confirm-message="Delete user <?= htmlspecialchars(addslashes($u['username'])) ?>?"
+                                      data-confirm-text="Delete"
+                                      data-confirm-class="btn btn-danger">
                                     <input type="hidden" name="action"  value="delete_user">
                                     <input type="hidden" name="user_id" value="<?= $u['id'] ?>">
                                     <button type="submit" class="btn btn-action btn-outline-danger">

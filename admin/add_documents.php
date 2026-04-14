@@ -8,10 +8,6 @@ $sid = (int)$_SESSION['active_system_id'];
 $flash = '';
 $flashType = 'success';
 
-$billCatsStmt = $pdo->prepare("SELECT id FROM categories WHERE system_id=? AND LOWER(name) LIKE ?");
-$billCatsStmt->execute([$sid, '%billing%']);
-$billingCatIds = array_map('intval', $billCatsStmt->fetchAll(PDO::FETCH_COLUMN));
-
 function handleRowUpload(int $index): ?string {
     if (!isset($_FILES['row_image']['name'][$index])) return null;
     if (!is_uploaded_file($_FILES['row_image']['tmp_name'][$index])) return null;
@@ -114,10 +110,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if ($cat_id === null || $dt_id === null) {
                     continue;
-                }
-
-                if (!in_array($cat_id, $billingCatIds, true)) {
-                    $qual_id = null;
                 }
 
                 $rowDateSubmission = ($date_submissions[$i] ?? '') ?: ($date_sub_shared ?: null);
@@ -558,6 +550,7 @@ $recentDocuments = $recentStmt->fetchAll();
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="../assets/js/main.js"></script>
 <script>
 const DT_BY_CAT = <?= json_encode($dtByCat, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>;
 const DT_ALL    = <?= json_encode($dtAll, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>;
@@ -878,7 +871,13 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         document.getElementById('btnAdd5').addEventListener('click', () => addRows(5, getPrefill()));
         document.getElementById('btnAdd10').addEventListener('click', () => addRows(10, getPrefill()));
         document.getElementById('btnClearRows').addEventListener('click', () => {
-            if (confirm('Clear all rows?')) resetFormRows();
+            showConfirmModal('Clear all rows?', {
+                title: 'Clear Rows',
+                confirmText: 'Clear',
+                confirmClass: 'btn btn-danger'
+            }).then(function (ok) {
+                if (ok) resetFormRows();
+            });
         });
 
         document.getElementById('addRowsTbody').addEventListener('click', function(e){
@@ -911,7 +910,7 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             const rows = document.querySelectorAll('#addRowsTbody tr:not(#addRowsEmpty)');
             if (rows.length === 0) {
                 e.preventDefault();
-                alert('Add at least one row before saving.');
+                showToast('Add at least one row before saving.', 'warning');
                 return;
             }
 
@@ -929,7 +928,7 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
 
             if (bad) {
                 e.preventDefault();
-                alert('Highlighted rows are missing a Category or Document Type.');
+                showToast('Highlighted rows are missing a Category or Document Type.', 'warning');
             }
         });
 

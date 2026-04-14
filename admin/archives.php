@@ -8,23 +8,51 @@ $sid = (int)$_SESSION['active_system_id'];
 $flash     = '';
 $flashType = 'success';
 
+if (!empty($_SESSION['archives_flash_message'])) {
+    $flash = (string)$_SESSION['archives_flash_message'];
+    $flashType = (string)($_SESSION['archives_flash_type'] ?? 'success');
+    unset($_SESSION['archives_flash_message'], $_SESSION['archives_flash_type']);
+}
+
+function setArchiveFlash(string $message, string $type = 'success'): void {
+    $_SESSION['archives_flash_message'] = $message;
+    $_SESSION['archives_flash_type'] = $type;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
+    $ids = array_values(array_filter(
+        array_map('intval', $_POST['selected_ids'] ?? []),
+        static fn($id) => $id > 0
+    ));
+    $adminPassword = (string)($_POST['admin_password'] ?? '');
+
+    if (in_array($action, ['bulk_restore', 'bulk_delete'], true)) {
+        if (!$ids) {
+            setArchiveFlash('Select at least one row first.', 'warning');
+            header('Location: archives.php');
+            exit;
+        }
+
+        if ($adminPassword === '' || !password_verify($adminPassword, (string)$currentUser['password_hash'])) {
+            setArchiveFlash('Admin password is incorrect.', 'danger');
+            header('Location: archives.php');
+            exit;
+        }
+    }
 
     // RESTORE
     if ($action === 'bulk_restore') {
-        $ids = array_map('intval', $_POST['selected_ids'] ?? []);
         if ($ids) {
             $ph = implode(',', array_fill(0, count($ids), '?'));
             $pdo->prepare("UPDATE documents SET is_archived=0 WHERE id IN ($ph) AND system_id=?")
                 ->execute(array_merge($ids, [$sid]));
-            $flash = count($ids) . ' document(s) restored.';
+            setArchiveFlash(count($ids) . ' document(s) restored.');
         }
     }
 
     // DELETE permanently
     if ($action === 'bulk_delete') {
-        $ids = array_map('intval', $_POST['selected_ids'] ?? []);
         if ($ids) {
             // Delete uploaded files first
             $ph = implode(',', array_fill(0, count($ids), '?'));
@@ -37,7 +65,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $pdo->prepare("DELETE FROM documents WHERE id IN ($ph) AND system_id=?")
                 ->execute(array_merge($ids, [$sid]));
-            $flash = count($ids) . ' document(s) permanently deleted.'; $flashType = 'warning';
+            setArchiveFlash(count($ids) . ' document(s) permanently deleted.', 'warning');
         }
     }
 
@@ -132,14 +160,16 @@ $qualifications= $pdo->prepare('SELECT * FROM qualifications  WHERE system_id=? 
     </form>
 
     <form method="POST" id="bulkForm">
+        <input type="hidden" name="action" id="bulkActionInput" value="">
+        <input type="hidden" name="admin_password" id="bulkAdminPasswordInput" value="">
         <div class="action-bar no-print">
-            <button type="submit" name="action" value="bulk_restore" class="btn btn-modern btn-success"
-                    onclick="return bulkConfirm(this, 'restore')">
+            <button type="button" class="btn btn-modern btn-success"
+                    onclick="return requestArchiveBulkAction('bulk_restore', 'restore')">
                 <i class="bi bi-arrow-counterclockwise"></i>Restore Selected
             </button>
-            <button type="submit" name="action" value="bulk_delete" class="btn btn-modern btn-danger"
+            <button type="button" class="btn btn-modern btn-danger"
                     id="bulkDeleteBtn"
-                    onclick="return bulkConfirm(this, 'delete')">
+                    onclick="return requestArchiveBulkAction('bulk_delete', 'delete')">
                 <i class="bi bi-trash"></i>Delete Permanently
             </button>
             <button type="button" class="btn btn-modern btn-secondary" id="printBtn">
@@ -218,17 +248,83 @@ $qualifications= $pdo->prepare('SELECT * FROM qualifications  WHERE system_id=? 
     </form>
 </main>
 
+<div class="modal fade" id="archivePasswordModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-md">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title text-white"><i class="bi bi-shield-lock me-2"></i>Admin Confirmation</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body px-4 py-4">
+                <p class="text-muted mb-3 fs-5">Enter admin password to <span id="archiveActionLabel">continue</span>.</p>
+                <label for="archivePasswordInput" class="form-label fw-semibold mb-2 fs-4">Admin Password</label>
+                <input type="password" id="archivePasswordInput" class="form-control form-control-lg" autocomplete="current-password" placeholder="Enter password">
+            </div>
+            <div class="modal-footer px-4 py-3">
+                <button type="button" class="btn btn-outline-secondary btn-lg px-4" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-tb5-primary btn-lg px-4" id="archivePasswordSubmit">
+                    <i class="bi bi-check2-circle me-1"></i>Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
 <script src="../assets/js/main.js"></script>
 <script>
-function bulkConfirm(btn, action) {
+let pendingArchiveAction = '';
+
+function requestArchiveBulkAction(actionValue, actionLabel) {
     var checked = document.querySelectorAll('.row-check:checked').length;
     if (checked === 0) { showToast('Select at least one row.', 'warning'); return false; }
-    return confirm(checked + ' document(s) will be ' + action + 'd. Continue?');
+
+    pendingArchiveAction = actionValue;
+    document.getElementById('archiveActionLabel').textContent = actionLabel + ' ' + checked + ' document(s)';
+    document.getElementById('archivePasswordInput').value = '';
+    document.getElementById('bulkAdminPasswordInput').value = '';
+
+    const modalEl = document.getElementById('archivePasswordModal');
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    setTimeout(function () {
+        document.getElementById('archivePasswordInput')?.focus();
+    }, 120);
+
+    return false;
 }
+
+document.getElementById('archivePasswordSubmit')?.addEventListener('click', function () {
+    if (!pendingArchiveAction) return;
+
+    const passInput = document.getElementById('archivePasswordInput');
+    const adminPassword = (passInput?.value || '').trim();
+    if (!adminPassword) {
+        showToast('Admin password is required.', 'warning');
+        passInput?.focus();
+        return;
+    }
+
+    document.getElementById('bulkActionInput').value = pendingArchiveAction;
+    document.getElementById('bulkAdminPasswordInput').value = adminPassword;
+    document.getElementById('bulkForm').submit();
+});
+
+document.getElementById('archivePasswordInput')?.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        document.getElementById('archivePasswordSubmit')?.click();
+    }
+});
+
+document.getElementById('archivePasswordModal')?.addEventListener('hidden.bs.modal', function () {
+    pendingArchiveAction = '';
+    document.getElementById('bulkActionInput').value = '';
+    document.getElementById('bulkAdminPasswordInput').value = '';
+    document.getElementById('archivePasswordInput').value = '';
+});
 </script>
 </body>
 </html>
