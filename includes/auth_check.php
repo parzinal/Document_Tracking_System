@@ -9,7 +9,7 @@ if (session_status() === PHP_SESSION_NONE) {
 require_once __DIR__ . '/../config/database.php';
 
 if (empty($_SESSION['user_id'])) {
-    header('Location: ' . str_repeat('../', substr_count($_SERVER['PHP_SELF'], '/', 1) - 1) . 'loginform/login.php');
+    header('Location: ' . str_repeat('../', substr_count($_SERVER['PHP_SELF'], '/', 1) - 1) . 'index.php');
     exit;
 }
 
@@ -40,7 +40,7 @@ $stmtUser->execute([$_SESSION['user_id']]);
 $currentUser = $stmtUser->fetch();
 if (!$currentUser) {
     session_destroy();
-    header('Location: ../loginform/login.php');
+    header('Location: ../index.php');
     exit;
 }
 

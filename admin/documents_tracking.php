@@ -26,6 +26,23 @@ function normalizeRemark($value): ?string {
     return in_array($v, ['received', 'returned'], true) ? $v : null;
 }
 
+function parseStoredImagePaths(?string $raw): array {
+    $raw = trim((string)$raw);
+    if ($raw === '') return [];
+
+    $decoded = json_decode($raw, true);
+    if (is_array($decoded)) {
+        $list = [];
+        foreach ($decoded as $path) {
+            $path = trim((string)$path);
+            if ($path !== '') $list[] = $path;
+        }
+        return $list;
+    }
+
+    return [$raw];
+}
+
 if (isset($_GET['archive_id'])) {
     $pdo->prepare("UPDATE documents SET is_archived=1 WHERE id=? AND system_id=?")->execute([(int)$_GET['archive_id'], $sid]);
     header('Location: documents_tracking.php'); exit;
@@ -356,12 +373,109 @@ foreach($subsStmt->fetchAll() as $s){ $docSubs[(int)$s['document_type_id']][]=$s
             align-items: center;
             justify-content: center;
             cursor: pointer;
+            position: relative;
+            padding: 0;
         }
-        #documentsTable .doc-thumb {
+        #documentsTable .img-cell-wrap:hover {
+            border-color: #b8cde6;
+            background: #edf4fc;
+        }
+        #documentsTable .doc-gallery-thumb {
             width: 100%;
             height: 100%;
             object-fit: cover;
             display: block;
+        }
+        #documentsTable .img-more-badge {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            min-width: 20px;
+            height: 20px;
+            border-radius: 999px;
+            background: rgba(33, 37, 41, 0.86);
+            color: #fff;
+            font-size: .64rem;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 5px;
+            line-height: 1;
+            pointer-events: none;
+            border: 1px solid rgba(255, 255, 255, 0.55);
+        }
+
+        #docFilesGalleryModal .modal-dialog {
+            max-width: 980px;
+        }
+        .doc-gallery-viewer {
+            min-height: 58vh;
+            max-height: 70vh;
+            border: 1px solid #dbe4f1;
+            border-radius: 12px;
+            background: #f7faff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .doc-gallery-viewer img {
+            max-width: 100%;
+            max-height: 68vh;
+            object-fit: contain;
+            display: block;
+        }
+        .doc-gallery-viewer iframe {
+            width: 100%;
+            height: 68vh;
+            border: 0;
+            background: #fff;
+        }
+        .doc-gallery-thumbs {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            padding: 2px 2px 4px;
+            overflow-x: auto;
+        }
+        .doc-gallery-thumb-btn {
+            width: 74px;
+            height: 74px;
+            border-radius: 10px;
+            border: 1px solid #d6dfec;
+            background: #fff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            flex: 0 0 auto;
+        }
+        .doc-gallery-thumb-btn.is-active {
+            border-color: var(--accent, #3576bd);
+            box-shadow: 0 0 0 .15rem rgba(53, 118, 189, .16);
+        }
+        .doc-gallery-thumb-btn img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: inherit;
+            display: block;
+        }
+        .doc-gallery-pdf-chip {
+            min-width: 58px;
+            height: 48px;
+            border-radius: 8px;
+            border: 1px solid #f1b8c0;
+            background: #fff1f3;
+            color: #b52536;
+            font-size: .72rem;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 0 8px;
         }
 
         #documentsTable .td-actions .btn-action {
@@ -507,10 +621,32 @@ foreach($subsStmt->fetchAll() as $s){ $docSubs[(int)$s['document_type_id']][]=$s
                         <td class="td-fixed"><?= $dateChip($doc['tesda_released']) ?></td>
                         <td class="td-fixed"><?= $remarkHtml ?></td>
                         <td class="td-img">
-                            <?php if($doc['image_path']): ?>
-                                <div class="img-cell-wrap" data-image="<?= htmlspecialchars($doc['image_path']) ?>">
-                                    <img src="../<?= htmlspecialchars($doc['image_path']) ?>" class="doc-thumb" alt="doc" data-image="<?= htmlspecialchars($doc['image_path']) ?>" onerror="this.style.display='none'">
-                                </div>
+                            <?php $docFiles = parseStoredImagePaths($doc['image_path'] ?? null); ?>
+                            <?php if($docFiles): ?>
+                                <?php
+                                    $previewFiles = array_slice($docFiles, 0, 5);
+                                    $thumbPath = (string)$previewFiles[0];
+                                    $previewUrls = array_map(
+                                        static fn($path) => '../' . ltrim((string)$path, '/'),
+                                        $previewFiles
+                                    );
+                                    $filesJson = htmlspecialchars(
+                                        (string)json_encode($previewUrls, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT),
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    );
+                                ?>
+                                <button
+                                    type="button"
+                                    class="img-cell-wrap js-doc-gallery-trigger"
+                                    data-files="<?= $filesJson ?>"
+                                    title="View <?= count($previewFiles) ?> file(s)"
+                                >
+                                    <img src="../<?= htmlspecialchars($thumbPath) ?>" class="doc-gallery-thumb" alt="doc" onerror="this.style.display='none'">
+                                    <?php if (count($previewFiles) > 1): ?>
+                                        <span class="img-more-badge">+<?= count($previewFiles) - 1 ?></span>
+                                    <?php endif; ?>
+                                </button>
                             <?php else: ?>
                                 <span class="empty-cell">—</span>
                             <?php endif; ?>
@@ -719,6 +855,33 @@ foreach($subsStmt->fetchAll() as $s){ $docSubs[(int)$s['document_type_id']][]=$s
                 <p id="previewMsg" class="mt-2" style="display:none"></p>
             </div>
             <div class="modal-footer"><button type="button" id="previewPrint" class="btn btn-outline-dark"><i class="bi bi-printer me-1"></i>Print</button><a id="previewOpen" class="btn btn-outline-primary" target="_blank">Open</a><a id="previewDownload" class="btn btn-outline-secondary" download>Download</a><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button></div>
+        </div>
+    </div>
+</div>
+
+<!-- DOCUMENT FILES GALLERY MODAL -->
+<div class="modal fade" id="docFilesGalleryModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-images me-2"></i>Document Attachments</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="docGalleryViewer" class="doc-gallery-viewer">
+                    <div id="docGalleryEmpty" class="text-muted">No file selected.</div>
+                    <img id="docGalleryImage" class="d-none" alt="Document file preview">
+                    <iframe id="docGalleryFrame" class="d-none" title="Document file preview"></iframe>
+                </div>
+                <div id="docGalleryThumbs" class="doc-gallery-thumbs"></div>
+            </div>
+            <div class="modal-footer d-flex justify-content-between">
+                <small id="docGalleryCounter" class="text-muted">0 / 0</small>
+                <div class="d-flex gap-2">
+                    <a id="docGalleryOpen" class="btn btn-outline-primary btn-sm disabled" target="_blank" rel="noopener">Open File</a>
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -984,6 +1147,134 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             if (bad){
                 e.preventDefault();
                 showToast('Rows highlighted in red are missing a Category or Document Type.', 'warning');
+            }
+        });
+    });
+})();
+
+(function(){
+    function detectFileType(url) {
+        return /\.pdf(?:$|[?#])/i.test(String(url || '')) ? 'pdf' : 'image';
+    }
+
+    document.addEventListener('DOMContentLoaded', function(){
+        const modalEl = document.getElementById('docFilesGalleryModal');
+        if (!modalEl) return;
+
+        const galleryModal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        const viewerEmpty = document.getElementById('docGalleryEmpty');
+        const viewerImage = document.getElementById('docGalleryImage');
+        const viewerFrame = document.getElementById('docGalleryFrame');
+        const thumbsWrap = document.getElementById('docGalleryThumbs');
+        const counter = document.getElementById('docGalleryCounter');
+        const openLink = document.getElementById('docGalleryOpen');
+
+        let files = [];
+        let activeIndex = 0;
+
+        function setViewer(index) {
+            if (!files.length || index < 0 || index >= files.length) return;
+
+            activeIndex = index;
+            const url = files[activeIndex];
+            const type = detectFileType(url);
+
+            viewerEmpty.classList.add('d-none');
+            viewerImage.classList.add('d-none');
+            viewerFrame.classList.add('d-none');
+            viewerImage.removeAttribute('src');
+            viewerFrame.removeAttribute('src');
+
+            if (type === 'pdf') {
+                viewerFrame.src = url;
+                viewerFrame.classList.remove('d-none');
+            } else {
+                viewerImage.src = url;
+                viewerImage.classList.remove('d-none');
+            }
+
+            counter.textContent = (activeIndex + 1) + ' / ' + files.length;
+            if (openLink) {
+                openLink.href = url;
+                openLink.classList.remove('disabled');
+                openLink.textContent = type === 'pdf' ? 'Open PDF' : 'Open File';
+            }
+
+            thumbsWrap.querySelectorAll('.doc-gallery-thumb-btn').forEach(function(btn, idx){
+                btn.classList.toggle('is-active', idx === activeIndex);
+            });
+        }
+
+        function renderThumbs() {
+            thumbsWrap.innerHTML = '';
+            files.forEach(function(url, idx){
+                const type = detectFileType(url);
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'doc-gallery-thumb-btn';
+                btn.dataset.index = String(idx);
+
+                if (type === 'pdf') {
+                    btn.innerHTML = '<span class="doc-gallery-pdf-chip"><i class="bi bi-file-earmark-pdf"></i>PDF</span>';
+                } else {
+                    const img = document.createElement('img');
+                    img.src = url;
+                    img.alt = 'Attachment ' + (idx + 1);
+                    btn.appendChild(img);
+                }
+
+                thumbsWrap.appendChild(btn);
+            });
+        }
+
+        thumbsWrap.addEventListener('click', function(e){
+            const btn = e.target.closest('.doc-gallery-thumb-btn');
+            if (!btn) return;
+            const idx = Number(btn.dataset.index || 0);
+            setViewer(Number.isNaN(idx) ? 0 : idx);
+        });
+
+        document.addEventListener('click', function(e){
+            const trigger = e.target.closest('.js-doc-gallery-trigger');
+            if (!trigger) return;
+
+            let nextFiles = [];
+            try {
+                nextFiles = JSON.parse(trigger.dataset.files || '[]');
+            } catch (_err) {
+                nextFiles = [];
+            }
+
+            files = Array.isArray(nextFiles)
+                ? nextFiles.map(function(url){ return String(url || '').trim(); }).filter(Boolean).slice(0, 5)
+                : [];
+
+            if (!files.length) {
+                showToast('No files available to preview.', 'warning');
+                return;
+            }
+
+            renderThumbs();
+            setViewer(0);
+            galleryModal.show();
+        });
+
+        modalEl.addEventListener('hidden.bs.modal', function(){
+            files = [];
+            activeIndex = 0;
+            thumbsWrap.innerHTML = '';
+            counter.textContent = '0 / 0';
+
+            viewerImage.classList.add('d-none');
+            viewerFrame.classList.add('d-none');
+            viewerEmpty.classList.remove('d-none');
+            viewerImage.removeAttribute('src');
+            viewerFrame.removeAttribute('src');
+
+            if (openLink) {
+                openLink.removeAttribute('href');
+                openLink.classList.add('disabled');
+                openLink.textContent = 'Open File';
             }
         });
     });

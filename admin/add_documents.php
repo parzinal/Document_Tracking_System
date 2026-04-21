@@ -8,38 +8,97 @@ $sid = (int)$_SESSION['active_system_id'];
 $flash = '';
 $flashType = 'success';
 
-function handleRowUpload(int $index): ?string {
-    if (!isset($_FILES['row_image']['name'][$index])) return null;
-    if (!is_uploaded_file($_FILES['row_image']['tmp_name'][$index])) return null;
-    if ($_FILES['row_image']['error'][$index] !== UPLOAD_ERR_OK) return null;
+function parseStoredImagePaths(?string $raw): array {
+    $raw = trim((string)$raw);
+    if ($raw === '') return [];
 
-    $tmp = $_FILES['row_image']['tmp_name'][$index];
-    $size = (int)($_FILES['row_image']['size'][$index] ?? 0);
-    if ($size <= 0) return null;
+    $decoded = json_decode($raw, true);
+    if (is_array($decoded)) {
+        $list = [];
+        foreach ($decoded as $path) {
+            $path = trim((string)$path);
+            if ($path !== '') $list[] = $path;
+        }
+        return $list;
+    }
+
+    return [$raw];
+}
+
+function encodeStoredImagePaths(array $paths): ?string {
+    $list = [];
+    foreach ($paths as $path) {
+        $path = trim((string)$path);
+        if ($path !== '') $list[] = $path;
+    }
+
+    if (!$list) return null;
+    if (count($list) === 1) return $list[0];
+
+    $encoded = json_encode(array_values($list), JSON_UNESCAPED_SLASHES);
+    if ($encoded === false) {
+        throw new RuntimeException('Failed to store uploaded row files.');
+    }
+    if (strlen($encoded) > 300) {
+        throw new RuntimeException('Too many files in one row. Keep up to 5 files per row.');
+    }
+
+    return $encoded;
+}
+
+function handleRowUploads(string $rowKey): array {
+    if ($rowKey === '') return [];
+
+    $names = $_FILES['row_image']['name'][$rowKey] ?? null;
+    if (!is_array($names) || !$names) return [];
+    if (count($names) > 5) {
+        throw new RuntimeException('Only up to 5 files are allowed per row.');
+    }
+
+    $tmpNames = $_FILES['row_image']['tmp_name'][$rowKey] ?? [];
+    $errors = $_FILES['row_image']['error'][$rowKey] ?? [];
+    $sizes = $_FILES['row_image']['size'][$rowKey] ?? [];
 
     $allowed = ['image/jpeg','image/png','image/gif','image/webp','application/pdf'];
     $finfo = new finfo(FILEINFO_MIME_TYPE);
-    $mime = $finfo->file($tmp);
-    if (!in_array($mime, $allowed, true)) {
-        throw new RuntimeException('Invalid file type in one of the row images.');
-    }
-    if ($size > 5 * 1024 * 1024) {
-        throw new RuntimeException('One of the row images is too large (max 5 MB).');
+    $paths = [];
+
+    foreach ($names as $idx => $original) {
+        $error = $errors[$idx] ?? UPLOAD_ERR_NO_FILE;
+        if ($error === UPLOAD_ERR_NO_FILE) continue;
+        if ($error !== UPLOAD_ERR_OK) {
+            throw new RuntimeException('One of the row files failed to upload.');
+        }
+
+        $tmp = (string)($tmpNames[$idx] ?? '');
+        if ($tmp === '' || !is_uploaded_file($tmp)) continue;
+
+        $size = (int)($sizes[$idx] ?? 0);
+        if ($size <= 0) continue;
+
+        $mime = $finfo->file($tmp);
+        if (!in_array($mime, $allowed, true)) {
+            throw new RuntimeException('Invalid file type in one of the row attachments.');
+        }
+        if ($size > 5 * 1024 * 1024) {
+            throw new RuntimeException('One of the row attachments is too large (max 5 MB).');
+        }
+
+        $ext = strtolower(pathinfo((string)$original, PATHINFO_EXTENSION));
+        if ($ext === '') {
+            $ext = $mime === 'application/pdf' ? 'pdf' : 'jpg';
+        }
+
+        $filename = uniqid('doc_', true) . '.' . $ext;
+        $dest = __DIR__ . '/../assets/upload/' . $filename;
+        if (!move_uploaded_file($tmp, $dest)) {
+            throw new RuntimeException('Failed to save one of the row attachments.');
+        }
+
+        $paths[] = 'assets/upload/' . $filename;
     }
 
-    $original = (string)($_FILES['row_image']['name'][$index] ?? '');
-    $ext = strtolower(pathinfo($original, PATHINFO_EXTENSION));
-    if ($ext === '') {
-        $ext = $mime === 'application/pdf' ? 'pdf' : 'jpg';
-    }
-
-    $filename = uniqid('doc_', true) . '.' . $ext;
-    $dest = __DIR__ . '/../assets/upload/' . $filename;
-    if (!move_uploaded_file($tmp, $dest)) {
-        throw new RuntimeException('Failed to save one of the row images.');
-    }
-
-    return 'assets/upload/' . $filename;
+    return $paths;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -60,6 +119,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $date_assessments  = $_POST['date_assessment']      ?? [];
         $assessor_names    = $_POST['assessor_name']        ?? [];
         $tesda_releaseds   = $_POST['tesda_released']       ?? [];
+        $row_file_keys     = $_POST['row_file_key']         ?? [];
 
         $ins = $pdo->prepare('INSERT INTO documents
             (system_id,category_id,document_type_id,document_sub,qualification_id,
@@ -74,7 +134,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             count($date_submissions),
             count($batch_nos),
             count($remarks_arr),
-            isset($_FILES['row_image']['name']) && is_array($_FILES['row_image']['name']) ? count($_FILES['row_image']['name']) : 0
+            count($row_file_keys)
         );
 
         try {
@@ -85,7 +145,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $sub_doc = isset($sub_docs[$i]) ? trim($sub_docs[$i]) ?: null : null;
                 $batch = trim($batch_nos[$i] ?? '') ?: null;
                 $rem = trim($remarks_arr[$i] ?? '') ?: null;
-                $imgPath = handleRowUpload($i);
+                $imgPaths = handleRowUploads((string)($row_file_keys[$i] ?? ''));
+                $imgPath = encodeStoredImagePaths($imgPaths);
 
                 $hasOtherData = (
                     $cat_id !== null ||
@@ -101,7 +162,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ($date_assessments[$i] ?? '') !== '' ||
                     trim($assessor_names[$i] ?? '') !== '' ||
                     ($tesda_releaseds[$i] ?? '') !== '' ||
-                    $imgPath !== null
+                    !empty($imgPaths)
                 );
 
                 if (!$hasOtherData) {
@@ -285,9 +346,35 @@ $recentDocuments = $recentStmt->fetchAll();
         .recent-table { min-width: 1320px; margin: 0; }
         .recent-table thead th { white-space: nowrap; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
         .img-mini { width: 42px; height: 42px; object-fit: cover; border-radius: 6px; border: 1px solid #ced4da; background: #fff; }
-        .file-cell-wrap { min-width: 168px; }
+        .file-cell-wrap { min-width: 228px; }
         .file-cell-wrap .form-control { height: 28px; }
         .btn-file-preview { width: 100%; margin-top: 4px; font-size: .7rem; padding: 2px 6px; }
+        .file-select-note {
+            margin-top: 4px;
+            font-size: .67rem;
+            color: #6c757d;
+            line-height: 1.2;
+        }
+        .file-preview-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 4px;
+        }
+        .file-preview-item {
+            border: 1px solid #d6dee8;
+            border-radius: 7px;
+            background: #fff;
+            padding: 2px;
+        }
+        .file-preview-item .img-mini { width: 34px; height: 34px; }
+        .file-preview-item .pdf-chip { min-width: 46px; height: 34px; font-size: .65rem; }
+        .file-count-note {
+            display: block;
+            margin-top: 3px;
+            font-size: .66rem;
+            color: #6c757d;
+        }
         .preview-trigger { background: transparent; border: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
         .preview-trigger:focus-visible { outline: 2px solid var(--accent, #0d6efd); outline-offset: 2px; border-radius: 8px; }
         .pdf-chip {
@@ -429,7 +516,7 @@ $recentDocuments = $recentStmt->fetchAll();
                                 <th style="min-width:128px">Assessor Name</th>
                                 <th style="min-width:132px">TESDA Released</th>
                                 <th style="min-width:140px">Remarks</th>
-                                <th style="min-width:180px">Image/PDF</th>
+                                <th style="min-width:228px">Images / PDFs</th>
                                 <th style="width:34px"></th>
                             </tr>
                             </thead>
@@ -498,22 +585,31 @@ $recentDocuments = $recentStmt->fetchAll();
                             <td><?= $df($doc['tesda_released']) ?></td>
                             <td><?= $dv($doc['remarks']) ?: '—' ?></td>
                             <td>
-                                <?php if (!empty($doc['image_path'])):
-                                    $isPdf = strtolower(pathinfo((string)$doc['image_path'], PATHINFO_EXTENSION)) === 'pdf';
-                                ?>
-                                    <button
-                                        type="button"
-                                        class="preview-trigger js-preview-doc"
-                                        data-preview-url="../<?= htmlspecialchars($doc['image_path']) ?>"
-                                        data-preview-type="<?= $isPdf ? 'pdf' : 'image' ?>"
-                                        title="Preview file"
-                                    >
-                                        <?php if ($isPdf): ?>
-                                            <span class="pdf-chip"><i class="bi bi-file-earmark-pdf"></i>PDF</span>
-                                        <?php else: ?>
-                                            <img src="../<?= htmlspecialchars($doc['image_path']) ?>" alt="doc" class="img-mini" onerror="this.style.display='none'">
-                                        <?php endif; ?>
-                                    </button>
+                                <?php $docFiles = parseStoredImagePaths($doc['image_path'] ?? null); ?>
+                                <?php if ($docFiles): ?>
+                                    <div class="d-flex flex-wrap gap-1">
+                                        <?php foreach ($docFiles as $idx => $path):
+                                            $isPdf = strtolower(pathinfo((string)$path, PATHINFO_EXTENSION)) === 'pdf';
+                                            $previewType = $isPdf ? 'pdf' : 'image';
+                                        ?>
+                                            <button
+                                                type="button"
+                                                class="preview-trigger js-preview-doc file-preview-item"
+                                                data-preview-url="../<?= htmlspecialchars($path) ?>"
+                                                data-preview-type="<?= $previewType ?>"
+                                                title="Preview file <?= $idx + 1 ?>"
+                                            >
+                                                <?php if ($isPdf): ?>
+                                                    <span class="pdf-chip"><i class="bi bi-file-earmark-pdf"></i>PDF</span>
+                                                <?php else: ?>
+                                                    <img src="../<?= htmlspecialchars($path) ?>" alt="doc" class="img-mini" onerror="this.style.display='none'">
+                                                <?php endif; ?>
+                                            </button>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <?php if (count($docFiles) > 1): ?>
+                                        <small class="file-count-note"><?= count($docFiles) ?> files</small>
+                                    <?php endif; ?>
                                 <?php else: ?>
                                     <span class="text-muted">—</span>
                                 <?php endif; ?>
@@ -625,6 +721,7 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
     function makeRow(def) {
         def = def || {};
         rowSeq++;
+        const rowFileKey = String(rowSeq);
 
         const tr = document.createElement('tr');
         tr.dataset.seq = rowSeq;
@@ -679,36 +776,88 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
 
         const imgInp = document.createElement('input');
         imgInp.type = 'file';
-        imgInp.name = 'row_image[]';
+        imgInp.name = `row_image[${rowFileKey}][]`;
         imgInp.className = 'form-control form-control-sm';
         imgInp.accept = 'image/*,.pdf';
+        imgInp.multiple = true;
+
+        const rowKeyInp = document.createElement('input');
+        rowKeyInp.type = 'hidden';
+        rowKeyInp.name = 'row_file_key[]';
+        rowKeyInp.value = rowFileKey;
+
+        const fileMeta = document.createElement('div');
+        fileMeta.className = 'file-select-note';
+        fileMeta.textContent = 'No files selected (max 5 per row).';
+
+        const filePreviewList = document.createElement('div');
+        filePreviewList.className = 'file-preview-list';
 
         const previewBtn = document.createElement('button');
         previewBtn.type = 'button';
         previewBtn.className = 'btn btn-outline-primary btn-file-preview js-row-preview';
-        previewBtn.innerHTML = '<i class="bi bi-eye me-1"></i>Preview';
+        previewBtn.innerHTML = '<i class="bi bi-eye me-1"></i>Preview first';
         previewBtn.disabled = true;
 
         imgInp.addEventListener('change', function(){
-            if (this.dataset.previewUrl) {
-                URL.revokeObjectURL(this.dataset.previewUrl);
-                delete this.dataset.previewUrl;
+            if (Array.isArray(this._previewUrls)) {
+                this._previewUrls.forEach(url => URL.revokeObjectURL(url));
             }
+            this._previewUrls = [];
+            filePreviewList.innerHTML = '';
+            previewBtn.disabled = true;
+            previewBtn.innerHTML = '<i class="bi bi-eye me-1"></i>Preview first';
 
-            const file = this.files && this.files[0] ? this.files[0] : null;
-            if (!file) {
-                previewBtn.disabled = true;
+            const files = Array.from(this.files || []);
+            if (!files.length) {
+                fileMeta.textContent = 'No files selected (max 5 per row).';
                 return;
             }
 
-            this.dataset.previewUrl = URL.createObjectURL(file);
+            if (files.length > 5) {
+                showToast('Only up to 5 files are allowed per row.', 'warning');
+                this.value = '';
+                fileMeta.textContent = 'No files selected (max 5 per row).';
+                return;
+            }
+
+            files.forEach((file, idx) => {
+                const url = URL.createObjectURL(file);
+                this._previewUrls.push(url);
+                const typeHint = file.type || (/\.pdf$/i.test(file.name || '') ? 'pdf' : 'image');
+
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'preview-trigger js-row-file-item file-preview-item';
+                item.dataset.previewUrl = url;
+                item.dataset.previewType = typeHint;
+                item.title = file.name || ('Attachment ' + (idx + 1));
+
+                if (typeHint === 'pdf' || typeHint.toLowerCase() === 'application/pdf') {
+                    item.innerHTML = '<span class="pdf-chip"><i class="bi bi-file-earmark-pdf"></i>PDF</span>';
+                } else {
+                    const thumb = document.createElement('img');
+                    thumb.className = 'img-mini';
+                    thumb.alt = 'attachment';
+                    thumb.src = url;
+                    item.appendChild(thumb);
+                }
+
+                filePreviewList.appendChild(item);
+            });
+
+            fileMeta.textContent = files.length + ' file(s) selected.';
+            previewBtn.innerHTML = '<i class="bi bi-eye me-1"></i>Preview first (' + files.length + ')';
             previewBtn.disabled = false;
         });
 
         const fileWrap = document.createElement('div');
         fileWrap.className = 'file-cell-wrap';
+        fileWrap.appendChild(rowKeyInp);
         fileWrap.appendChild(imgInp);
         fileWrap.appendChild(previewBtn);
+        fileWrap.appendChild(fileMeta);
+        fileWrap.appendChild(filePreviewList);
 
         const del = document.createElement('button');
         del.type = 'button';
@@ -767,10 +916,10 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
     }
 
     function cleanupRowPreviewUrls(root) {
-        (root || document).querySelectorAll('input[name="row_image[]"]').forEach(inp => {
-            if (inp.dataset.previewUrl) {
-                URL.revokeObjectURL(inp.dataset.previewUrl);
-                delete inp.dataset.previewUrl;
+        (root || document).querySelectorAll('input[type="file"][name^="row_image["]').forEach(inp => {
+            if (Array.isArray(inp._previewUrls)) {
+                inp._previewUrls.forEach(url => URL.revokeObjectURL(url));
+                inp._previewUrls = [];
             }
         });
     }
@@ -881,17 +1030,22 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         });
 
         document.getElementById('addRowsTbody').addEventListener('click', function(e){
+            const previewItem = e.target.closest('.js-row-file-item');
+            if (previewItem) {
+                openPreview(previewItem.dataset.previewUrl || '', previewItem.dataset.previewType || '');
+                return;
+            }
+
             const previewBtn = e.target.closest('.js-row-preview');
             if (previewBtn) {
                 const row = previewBtn.closest('tr');
-                const fileInput = row ? row.querySelector('input[name="row_image[]"]') : null;
-                const file = fileInput && fileInput.files ? fileInput.files[0] : null;
-                if (!fileInput || !file) return;
+                const fileInput = row ? row.querySelector('input[type="file"][name^="row_image["]') : null;
+                const firstUrl = fileInput && Array.isArray(fileInput._previewUrls) ? fileInput._previewUrls[0] : '';
+                const firstFile = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+                const firstType = firstFile ? (firstFile.type || (/\.pdf$/i.test(firstFile.name || '') ? 'pdf' : 'image')) : '';
+                if (!firstUrl) return;
 
-                if (!fileInput.dataset.previewUrl) {
-                    fileInput.dataset.previewUrl = URL.createObjectURL(file);
-                }
-                openPreview(fileInput.dataset.previewUrl, file.type || '');
+                openPreview(firstUrl, firstType);
                 return;
             }
 

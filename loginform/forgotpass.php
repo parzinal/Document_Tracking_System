@@ -88,7 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             // Clear session state
             unset($_SESSION['fp_email'], $_SESSION['fp_step']);
 
-            header('Location: login.php?reset=success');
+            header('Location: ../index.php?reset=success');
             exit;
         }
     }

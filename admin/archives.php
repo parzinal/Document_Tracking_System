@@ -19,6 +19,23 @@ function setArchiveFlash(string $message, string $type = 'success'): void {
     $_SESSION['archives_flash_type'] = $type;
 }
 
+function parseStoredImagePaths(?string $raw): array {
+    $raw = trim((string)$raw);
+    if ($raw === '') return [];
+
+    $decoded = json_decode($raw, true);
+    if (is_array($decoded)) {
+        $list = [];
+        foreach ($decoded as $path) {
+            $path = trim((string)$path);
+            if ($path !== '') $list[] = $path;
+        }
+        return $list;
+    }
+
+    return [$raw];
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     $ids = array_values(array_filter(
@@ -59,8 +76,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sel = $pdo->prepare("SELECT image_path FROM documents WHERE id IN ($ph) AND system_id=?");
             $sel->execute(array_merge($ids, [$sid]));
             foreach ($sel->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                if ($r['image_path'] && file_exists(__DIR__ . '/../' . $r['image_path'])) {
-                    unlink(__DIR__ . '/../' . $r['image_path']);
+                foreach (parseStoredImagePaths($r['image_path'] ?? null) as $path) {
+                    $fullPath = __DIR__ . '/../' . $path;
+                    if ($path && file_exists($fullPath)) {
+                        unlink($fullPath);
+                    }
                 }
             }
             $pdo->prepare("DELETE FROM documents WHERE id IN ($ph) AND system_id=?")
@@ -233,9 +253,13 @@ $qualifications= $pdo->prepare('SELECT * FROM qualifications  WHERE system_id=? 
                                 <td><?= $doc['tesda_released']  ? date('m/d/Y', strtotime($doc['tesda_released']))  : '' ?></td>
                                 <td><?= htmlspecialchars($doc['remarks'] ?? '') ?></td>
                                 <td>
-                                    <?php if ($doc['image_path']): ?>
-                                        <img src="../<?= htmlspecialchars($doc['image_path']) ?>" class="doc-thumb" alt="img"
+                                    <?php $docFiles = parseStoredImagePaths($doc['image_path'] ?? null); ?>
+                                    <?php if ($docFiles): ?>
+                                        <img src="../<?= htmlspecialchars($docFiles[0]) ?>" class="doc-thumb" alt="img"
                                              onerror="this.style.display='none'">
+                                        <?php if (count($docFiles) > 1): ?>
+                                            <div><small class="text-muted">+<?= count($docFiles) - 1 ?> more</small></div>
+                                        <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
                             </tr>

@@ -5,6 +5,23 @@
 require_once __DIR__ . '/../includes/auth_check.php';
 $sid = (int)$_SESSION['active_system_id'];
 
+function parseStoredImagePaths(?string $raw): array {
+    $raw = trim((string)$raw);
+    if ($raw === '') return [];
+
+    $decoded = json_decode($raw, true);
+    if (is_array($decoded)) {
+        $list = [];
+        foreach ($decoded as $path) {
+            $path = trim((string)$path);
+            if ($path !== '') $list[] = $path;
+        }
+        return $list;
+    }
+
+    return [$raw];
+}
+
 // Stats
 $stmtAll  = $pdo->prepare('SELECT COUNT(*) FROM documents WHERE system_id=? AND is_archived=0');
 $stmtAll->execute([$sid]); $totalDocs = (int)$stmtAll->fetchColumn();
@@ -165,10 +182,14 @@ $recentDocs = $stmtRecent->fetchAll();
                             <td><?= $doc['date_submission'] ? date('m/d/Y', strtotime($doc['date_submission'])) : '—' ?></td>
                             <td><?= $doc['received_tesda']  ? date('m/d/Y', strtotime($doc['received_tesda']))  : '—' ?></td>
                             <td>
-                                <?php if (!empty($doc['image_path'])): ?>
-                                    <a href="../<?= htmlspecialchars($doc['image_path']) ?>" target="_blank" rel="noopener">
-                                        <img src="../<?= htmlspecialchars($doc['image_path']) ?>" alt="doc" style="width:36px;height:36px;object-fit:cover;border:1px solid #dbe3ee;border-radius:6px;" onerror="this.style.display='none'">
+                                <?php $docFiles = parseStoredImagePaths($doc['image_path'] ?? null); ?>
+                                <?php if ($docFiles): ?>
+                                    <a href="../<?= htmlspecialchars($docFiles[0]) ?>" target="_blank" rel="noopener">
+                                        <img src="../<?= htmlspecialchars($docFiles[0]) ?>" alt="doc" style="width:36px;height:36px;object-fit:cover;border:1px solid #dbe3ee;border-radius:6px;" onerror="this.style.display='none'">
                                     </a>
+                                    <?php if (count($docFiles) > 1): ?>
+                                        <div><small class="text-muted">+<?= count($docFiles) - 1 ?></small></div>
+                                    <?php endif; ?>
                                 <?php else: ?>
                                     <span class="text-muted">—</span>
                                 <?php endif; ?>

@@ -6,11 +6,28 @@ if (session_status() === PHP_SESSION_NONE) session_start();
 
 // Already logged in?
 if (!empty($_SESSION['user_id'])) {
-    header('Location: ../admin/dashboard.php');
+    $scriptName = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
+    $basePath = preg_replace('#/(?:index\.php|loginform/login\.php)$#', '', $scriptName);
+    $basePath = rtrim((string)($basePath ?? ''), '/');
+    $dashboardUrl = ($basePath === '' ? '' : $basePath) . '/admin/dashboard.php';
+    header('Location: ' . $dashboardUrl);
     exit;
 }
 
 require_once __DIR__ . '/../config/database.php';
+
+function appUrl(string $path = ''): string {
+    $scriptName = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
+    $basePath = preg_replace('#/(?:index\.php|loginform/login\.php)$#', '', $scriptName);
+    $basePath = rtrim((string)($basePath ?? ''), '/');
+    $suffix = ltrim($path, '/');
+
+    if ($basePath === '') {
+        return '/' . $suffix;
+    }
+
+    return $basePath . '/' . $suffix;
+}
 
 $error   = '';
 $success = '';
@@ -31,7 +48,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             session_regenerate_id(true);
             $_SESSION['user_id']           = $user['id'];
             $_SESSION['active_system_id']  = 1;
-            header('Location: ../admin/dashboard.php');
+            header('Location: ' . appUrl('admin/dashboard.php'));
             exit;
         } else {
             $error = 'Invalid email or password.';
@@ -336,11 +353,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="brand-section">
         <div class="logo-row">
             <div class="logo-circle">
-                <img src="../assets/images/bigfive_logo.png" alt="Big Five" onerror="this.style.display='none'">
+                <img src="<?= htmlspecialchars(appUrl('assets/images/bigfive_logo.png')) ?>" alt="Big Five" onerror="this.style.display='none'">
             </div>
             <div class="logo-divider"></div>
             <div class="logo-circle">
-                <img src="../assets/images/bigblossom_logo.png" alt="Big Blossom" onerror="this.style.display='none'">
+                <img src="<?= htmlspecialchars(appUrl('assets/images/bigblossom_logo.png')) ?>" alt="Big Blossom" onerror="this.style.display='none'">
             </div>
         </div>
         <h1 class="brand-title">TB5 Monitoring System</h1>
@@ -401,7 +418,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </form>
 
         <div class="text-center mt-3">
-            <a href="forgotpass.php" class="forgot-link">
+            <a href="<?= htmlspecialchars(appUrl('loginform/forgotpass.php')) ?>" class="forgot-link">
                 <i class="bi bi-question-circle"></i> Forgot Password?
             </a>
         </div>
