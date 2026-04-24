@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS `documents` (
   `date_assessment`  DATE          NULL,
   `assessor_name`    VARCHAR(150)  NULL,
   `tesda_released`   DATE          NULL,
-  `image_path`       VARCHAR(300)  NULL,
+  `image_path`       TEXT          NULL,
   `is_archived`      TINYINT(1)    NOT NULL DEFAULT 0,
   `created_at`       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at`       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

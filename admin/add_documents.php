@@ -8,22 +8,27 @@ $sid = (int)$_SESSION['active_system_id'];
 $flash = '';
 $flashType = 'success';
 
-function parseStoredImagePaths(?string $raw): array {
-    $raw = trim((string)$raw);
-    if ($raw === '') return [];
-
-    $decoded = json_decode($raw, true);
-    if (is_array($decoded)) {
-        $list = [];
-        foreach ($decoded as $path) {
-            $path = trim((string)$path);
-            if ($path !== '') $list[] = $path;
-        }
-        return $list;
+function ensureDocumentQualificationTable(PDO $pdo): bool {
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS document_qualifications (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            document_id INT UNSIGNED NOT NULL,
+            qualification_id INT UNSIGNED NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uniq_document_qualification (document_id, qualification_id),
+            KEY idx_document (document_id),
+            KEY idx_qualification (qualification_id),
+            CONSTRAINT fk_document_quals_document FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+            CONSTRAINT fk_document_quals_qualification FOREIGN KEY (qualification_id) REFERENCES qualifications(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        return true;
+    } catch (Throwable $_e) {
+        return false;
     }
-
-    return [$raw];
 }
+
+$hasDocumentQualificationTable = ensureDocumentQualificationTable($pdo);
 
 function encodeStoredImagePaths(array $paths): ?string {
     $list = [];
@@ -39,25 +44,23 @@ function encodeStoredImagePaths(array $paths): ?string {
     if ($encoded === false) {
         throw new RuntimeException('Failed to store uploaded row files.');
     }
-    if (strlen($encoded) > 300) {
-        throw new RuntimeException('Too many files in one row. Keep up to 5 files per row.');
+    if (strlen($encoded) > 60000) {
+        throw new RuntimeException('Attachment payload is too large. Reduce the number of files.');
     }
 
     return $encoded;
 }
 
-function handleRowUploads(string $rowKey): array {
-    if ($rowKey === '') return [];
-
-    $names = $_FILES['row_image']['name'][$rowKey] ?? null;
+function handleSharedUploads(): array {
+    $names = $_FILES['shared_files']['name'] ?? null;
     if (!is_array($names) || !$names) return [];
-    if (count($names) > 5) {
-        throw new RuntimeException('Only up to 5 files are allowed per row.');
+    if (count($names) > 20) {
+        throw new RuntimeException('Only up to 20 shared files are allowed for this batch.');
     }
 
-    $tmpNames = $_FILES['row_image']['tmp_name'][$rowKey] ?? [];
-    $errors = $_FILES['row_image']['error'][$rowKey] ?? [];
-    $sizes = $_FILES['row_image']['size'][$rowKey] ?? [];
+    $tmpNames = $_FILES['shared_files']['tmp_name'] ?? [];
+    $errors = $_FILES['shared_files']['error'] ?? [];
+    $sizes = $_FILES['shared_files']['size'] ?? [];
 
     $allowed = ['image/jpeg','image/png','image/gif','image/webp','application/pdf'];
     $finfo = new finfo(FILEINFO_MIME_TYPE);
@@ -67,7 +70,7 @@ function handleRowUploads(string $rowKey): array {
         $error = $errors[$idx] ?? UPLOAD_ERR_NO_FILE;
         if ($error === UPLOAD_ERR_NO_FILE) continue;
         if ($error !== UPLOAD_ERR_OK) {
-            throw new RuntimeException('One of the row files failed to upload.');
+            throw new RuntimeException('One of the shared files failed to upload.');
         }
 
         $tmp = (string)($tmpNames[$idx] ?? '');
@@ -78,10 +81,10 @@ function handleRowUploads(string $rowKey): array {
 
         $mime = $finfo->file($tmp);
         if (!in_array($mime, $allowed, true)) {
-            throw new RuntimeException('Invalid file type in one of the row attachments.');
+            throw new RuntimeException('Invalid file type in one of the shared attachments.');
         }
         if ($size > 5 * 1024 * 1024) {
-            throw new RuntimeException('One of the row attachments is too large (max 5 MB).');
+            throw new RuntimeException('One of the shared attachments is too large (max 5 MB).');
         }
 
         $ext = strtolower(pathinfo((string)$original, PATHINFO_EXTENSION));
@@ -92,7 +95,7 @@ function handleRowUploads(string $rowKey): array {
         $filename = uniqid('doc_', true) . '.' . $ext;
         $dest = __DIR__ . '/../assets/upload/' . $filename;
         if (!move_uploaded_file($tmp, $dest)) {
-            throw new RuntimeException('Failed to save one of the row attachments.');
+            throw new RuntimeException('Failed to save one of the shared attachments.');
         }
 
         $paths[] = 'assets/upload/' . $filename;
@@ -105,64 +108,88 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
     if ($action === 'add_multiple_documents') {
-        $date_sub_shared   = $_POST['date_submission_shared'] ?: null;
+        $date_sub_shared_raw = trim((string)($_POST['date_submission_shared'] ?? ''));
+        $date_sub_shared = $date_sub_shared_raw !== '' ? $date_sub_shared_raw : null;
         $category_ids      = $_POST['row_category_id']      ?? [];
         $doctype_ids       = $_POST['row_document_type_id'] ?? [];
-        $qualification_ids = $_POST['row_qualification_id'] ?? [];
-        $sub_docs          = $_POST['row_document_sub']     ?? [];
+        $qualification_map = $_POST['row_qualification_ids'] ?? [];
+        $row_keys          = $_POST['row_key']              ?? [];
         $batch_nos         = $_POST['batch_no']             ?? [];
         $remarks_arr       = $_POST['remarks']              ?? [];
-        $date_submissions  = $_POST['date_submission']      ?? [];
         $received_tesdas   = $_POST['received_tesda']       ?? [];
         $returned_centers  = $_POST['returned_center']      ?? [];
         $staff_receiveds   = $_POST['staff_received']       ?? [];
         $date_assessments  = $_POST['date_assessment']      ?? [];
         $assessor_names    = $_POST['assessor_name']        ?? [];
         $tesda_releaseds   = $_POST['tesda_released']       ?? [];
-        $row_file_keys     = $_POST['row_file_key']         ?? [];
 
         $ins = $pdo->prepare('INSERT INTO documents
-            (system_id,category_id,document_type_id,document_sub,qualification_id,
+            (system_id,category_id,document_type_id,qualification_id,
              date_submission,batch_no,remarks,received_tesda,returned_center,
              staff_received,date_assessment,assessor_name,tesda_released,image_path)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+        $insDocQual = $hasDocumentQualificationTable
+            ? $pdo->prepare('INSERT IGNORE INTO document_qualifications (document_id, qualification_id) VALUES (?, ?)')
+            : null;
 
         $count = 0;
         $rowTotal = max(
             count($category_ids),
             count($doctype_ids),
-            count($date_submissions),
+            count($row_keys),
             count($batch_nos),
-            count($remarks_arr),
-            count($row_file_keys)
+            count($remarks_arr)
         );
 
         try {
+            if ($date_sub_shared === null) {
+                throw new RuntimeException('Date Submitted is required for this batch.');
+            }
+
+            $sharedPaths = handleSharedUploads();
+            $sharedImagePath = encodeStoredImagePaths($sharedPaths);
+
             for ($i = 0; $i < $rowTotal; $i++) {
                 $cat_id = intval($category_ids[$i] ?? 0) ?: null;
                 $dt_id = intval($doctype_ids[$i] ?? 0) ?: null;
-                $qual_id = intval($qualification_ids[$i] ?? 0) ?: null;
-                $sub_doc = isset($sub_docs[$i]) ? trim($sub_docs[$i]) ?: null : null;
+                $rowKey = (string)($row_keys[$i] ?? '');
+                $rowQuals = [];
+                if (is_array($qualification_map)) {
+                    if ($rowKey !== '' && isset($qualification_map[$rowKey])) {
+                        $rowQuals = $qualification_map[$rowKey];
+                    } elseif (isset($qualification_map[$i])) {
+                        $rowQuals = $qualification_map[$i];
+                    }
+                }
+                if (!is_array($rowQuals)) {
+                    $rowQuals = [$rowQuals];
+                }
+
+                $qualIds = [];
+                foreach ($rowQuals as $qv) {
+                    $qid = intval($qv);
+                    if ($qid > 0) $qualIds[] = $qid;
+                }
+                if ($qualIds) {
+                    $qualIds = array_values(array_unique($qualIds));
+                }
+
                 $batch = trim($batch_nos[$i] ?? '') ?: null;
                 $rem = trim($remarks_arr[$i] ?? '') ?: null;
-                $imgPaths = handleRowUploads((string)($row_file_keys[$i] ?? ''));
-                $imgPath = encodeStoredImagePaths($imgPaths);
 
                 $hasOtherData = (
                     $cat_id !== null ||
                     $dt_id !== null ||
-                    $qual_id !== null ||
-                    $sub_doc !== null ||
+                    !empty($qualIds) ||
                     $batch !== null ||
                     $rem !== null ||
-                    ($date_submissions[$i] ?? '') !== '' ||
                     ($received_tesdas[$i] ?? '') !== '' ||
                     ($returned_centers[$i] ?? '') !== '' ||
                     ($staff_receiveds[$i] ?? '') !== '' ||
                     ($date_assessments[$i] ?? '') !== '' ||
                     trim($assessor_names[$i] ?? '') !== '' ||
                     ($tesda_releaseds[$i] ?? '') !== '' ||
-                    !empty($imgPaths)
+                    $sharedImagePath !== null
                 );
 
                 if (!$hasOtherData) {
@@ -173,26 +200,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     continue;
                 }
 
-                $rowDateSubmission = ($date_submissions[$i] ?? '') ?: ($date_sub_shared ?: null);
+                if ($hasDocumentQualificationTable) {
+                    $primaryQualId = $qualIds ? $qualIds[0] : null;
+                    $ins->execute([
+                        $sid,
+                        $cat_id,
+                        $dt_id,
+                        $primaryQualId,
+                        $date_sub_shared,
+                        $batch,
+                        $rem,
+                        ($received_tesdas[$i] ?? '') ?: null,
+                        ($returned_centers[$i] ?? '') ?: null,
+                        ($staff_receiveds[$i] ?? '') ?: null,
+                        ($date_assessments[$i] ?? '') ?: null,
+                        trim($assessor_names[$i] ?? '') ?: null,
+                        ($tesda_releaseds[$i] ?? '') ?: null,
+                        $sharedImagePath
+                    ]);
 
-                $ins->execute([
-                    $sid,
-                    $cat_id,
-                    $dt_id,
-                    $sub_doc,
-                    $qual_id,
-                    $rowDateSubmission,
-                    $batch,
-                    $rem,
-                    ($received_tesdas[$i] ?? '') ?: null,
-                    ($returned_centers[$i] ?? '') ?: null,
-                    ($staff_receiveds[$i] ?? '') ?: null,
-                    ($date_assessments[$i] ?? '') ?: null,
-                    trim($assessor_names[$i] ?? '') ?: null,
-                    ($tesda_releaseds[$i] ?? '') ?: null,
-                    $imgPath
-                ]);
-                $count++;
+                    $docId = (int)$pdo->lastInsertId();
+                    if ($docId > 0 && $insDocQual && $qualIds) {
+                        foreach ($qualIds as $qid) {
+                            $insDocQual->execute([$docId, $qid]);
+                        }
+                    }
+
+                    $count++;
+                    continue;
+                }
+
+                $qualTargets = $qualIds ? $qualIds : [null];
+                foreach ($qualTargets as $qual_id) {
+                    $ins->execute([
+                        $sid,
+                        $cat_id,
+                        $dt_id,
+                        $qual_id,
+                        $date_sub_shared,
+                        $batch,
+                        $rem,
+                        ($received_tesdas[$i] ?? '') ?: null,
+                        ($returned_centers[$i] ?? '') ?: null,
+                        ($staff_receiveds[$i] ?? '') ?: null,
+                        ($date_assessments[$i] ?? '') ?: null,
+                        trim($assessor_names[$i] ?? '') ?: null,
+                        ($tesda_releaseds[$i] ?? '') ?: null,
+                        $sharedImagePath
+                    ]);
+                    $count++;
+                }
             }
             $flash = $count . ' document(s) added.';
         } catch (RuntimeException $e) {
@@ -221,25 +278,6 @@ foreach ($documentTypes as $dt) {
 }
 $dtAll = array_map(fn($dt) => ['id' => $dt['id'], 'name' => $dt['name']], $documentTypes);
 
-$subsStmt = $pdo->prepare('SELECT document_type_id,name FROM document_subs WHERE system_id=? ORDER BY name');
-$subsStmt->execute([$sid]);
-$docSubs = [];
-foreach ($subsStmt->fetchAll() as $s) {
-    $docSubs[(int)$s['document_type_id']][] = $s['name'];
-}
-
-$recentStmt = $pdo->prepare(
-    'SELECT d.*, c.name AS cat_name, dt.name AS doc_type_name, q.name AS qual_name
-     FROM documents d
-     LEFT JOIN categories c ON d.category_id=c.id
-     LEFT JOIN document_types dt ON d.document_type_id=dt.id
-     LEFT JOIN qualifications q ON d.qualification_id=q.id
-     WHERE d.system_id=? AND d.is_archived=0
-     ORDER BY d.created_at DESC
-     LIMIT 50'
-);
-$recentStmt->execute([$sid]);
-$recentDocuments = $recentStmt->fetchAll();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -249,6 +287,7 @@ $recentDocuments = $recentStmt->fetchAll();
     <title>Add Documents — <?= htmlspecialchars($activeSystem['name']) ?></title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap">
     <link rel="stylesheet" href="../assets/header.css">
     <link rel="stylesheet" href="../assets/sidebar.css">
     <link rel="stylesheet" href="../assets/css/main.css">
@@ -259,15 +298,15 @@ $recentDocuments = $recentStmt->fetchAll();
             --required-warn-border: rgba(111, 141, 184, 0.36);
         }
         .theme-blossom .add-page-wrap {
-            --accent: #a45555;
-            --accent-dark: #321415;
-            --accent-mid: #6f2d2d;
-            --accent-light: #f8efef;
-            --accent-glow: rgba(164, 85, 85, 0.26);
-            --accent-gradient: linear-gradient(135deg, #321415 0%, #6f2d2d 54%, #a45555 100%);
-            --required-warn: #bc6d6d;
-            --required-warn-soft: #fff7f7;
-            --required-warn-border: rgba(188, 109, 109, 0.34);
+            --accent: #9b1c33;
+            --accent-dark: #350912;
+            --accent-mid: #6c1525;
+            --accent-light: #fff8e5;
+            --accent-glow: rgba(246, 199, 82, 0.34);
+            --accent-gradient: linear-gradient(135deg, #350912 0%, #6c1525 54%, #9b1c33 100%);
+            --required-warn: #9b1c33;
+            --required-warn-soft: #fff6eb;
+            --required-warn-border: rgba(155, 28, 51, 0.30);
         }
         .add-page-wrap { max-width: 1680px; margin: 0 auto; }
         .add-card { border: 1px solid var(--accent-light, #d8dfea); border-radius: 14px; overflow: hidden; background: #fff; box-shadow: 0 8px 28px rgba(20, 40, 90, .08); }
@@ -317,17 +356,17 @@ $recentDocuments = $recentStmt->fetchAll();
         .select-qual { border-color: #d9dee7 !important; }
         .theme-blossom .select-cat,
         .theme-blossom .select-dt {
-            border-color: rgba(164, 85, 85, .34) !important;
-            background-color: #fffafa !important;
+            border-color: rgba(147, 98, 18, .34) !important;
+            background-color: #fffdf4 !important;
         }
         .theme-blossom .select-qual {
-            border-color: #d7c8c8 !important;
+            border-color: #e4cfa0 !important;
             background-color: #fff !important;
         }
         .theme-blossom .select-cat:focus,
         .theme-blossom .select-dt:focus {
-            border-color: #a45555 !important;
-            box-shadow: 0 0 0 .15rem rgba(164, 85, 85, .22) !important;
+            border-color: #9b1c33 !important;
+            box-shadow: 0 0 0 .15rem rgba(155, 28, 51, .22) !important;
         }
         .add-page-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 12px 20px; border-top: 1px solid #dee2e6; background: #fafafa; }
         tr.row-invalid td {
@@ -341,10 +380,6 @@ $recentDocuments = $recentStmt->fetchAll();
         tr.row-invalid td:last-child {
             border-right: 1px solid var(--required-warn-border, rgba(188, 109, 109, 0.34)) !important;
         }
-        .recent-table-wrap { margin-top: 18px; border: 1px solid var(--accent-light, #d8dfea); border-radius: 12px; overflow: hidden; background: #fff; }
-        .recent-title { padding: 12px 16px; border-bottom: 1px solid var(--accent-light, #e7ecf4); background: var(--accent-light, #f7f9fd); font-weight: 700; color: var(--accent-dark, #1d3359); }
-        .recent-table { min-width: 1320px; margin: 0; }
-        .recent-table thead th { white-space: nowrap; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
         .img-mini { width: 42px; height: 42px; object-fit: cover; border-radius: 6px; border: 1px solid #ced4da; background: #fff; }
         .file-cell-wrap { min-width: 228px; }
         .file-cell-wrap .form-control { height: 28px; }
@@ -374,6 +409,73 @@ $recentDocuments = $recentStmt->fetchAll();
             margin-top: 3px;
             font-size: .66rem;
             color: #6c757d;
+        }
+        .qual-picker {
+            position: relative;
+            min-width: 180px;
+        }
+        .qual-picker-btn {
+            text-align: left;
+            padding-right: 26px !important;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            position: relative;
+        }
+        .qual-picker-btn::after {
+            content: '';
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            margin-top: -2px;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 6px solid #6b7788;
+            pointer-events: none;
+        }
+        .qual-picker-menu {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            right: 0;
+            max-height: 180px;
+            overflow-y: auto;
+            border: 1px solid #d6dee8;
+            border-radius: 8px;
+            background: #fff;
+            box-shadow: 0 8px 16px rgba(20, 40, 90, .14);
+            z-index: 25;
+            padding: 6px;
+        }
+        .qual-picker-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: .74rem;
+            color: #2b3443;
+            padding: 3px 2px;
+            margin: 0;
+            cursor: pointer;
+        }
+        .qual-picker-item input {
+            margin: 0;
+        }
+        .shared-upload-wrap {
+            border: 1px dashed var(--accent-glow, #d0dbf0);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.74);
+            padding: 10px;
+        }
+        .shared-files-section {
+            padding: 0 20px 12px;
+        }
+        .shared-files-title {
+            font-size: .74rem;
+            font-weight: 700;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: #5a6f8b;
+            margin-bottom: 6px;
         }
         .preview-trigger { background: transparent; border: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
         .preview-trigger:focus-visible { outline: 2px solid var(--accent, #0d6efd); outline-offset: 2px; border-radius: 8px; }
@@ -417,6 +519,380 @@ $recentDocuments = $recentStmt->fetchAll();
             border: 0;
             background: #fff;
         }
+
+        /* Modern visual refresh */
+        body {
+            background:
+                radial-gradient(1200px 420px at 12% -6%, rgba(76, 122, 186, 0.14), rgba(76, 122, 186, 0) 65%),
+                radial-gradient(900px 320px at 92% 0%, rgba(41, 86, 148, 0.12), rgba(41, 86, 148, 0) 70%),
+                #edf2f8;
+        }
+        .add-page-wrap {
+            max-width: 1720px;
+            position: relative;
+            font-family: 'Manrope', 'Segoe UI', sans-serif;
+        }
+        .add-page-wrap .page-title {
+            font-size: 1.8rem;
+            font-weight: 800;
+            letter-spacing: -.02em;
+            color: #152944;
+        }
+        .add-page-wrap .page-subtitle {
+            font-size: .85rem;
+            color: #667e9b;
+            font-weight: 600;
+        }
+
+        .add-card {
+            border-radius: 22px;
+            border: 1px solid rgba(152, 172, 199, 0.35);
+            box-shadow: 0 18px 44px rgba(24, 49, 88, 0.12);
+            animation: addCardLift .32s ease;
+        }
+        .add-card-header {
+            position: relative;
+            padding: 22px 24px;
+            background:
+                linear-gradient(104deg, rgba(10, 39, 78, 0.98) 0%, rgba(36, 86, 151, 0.94) 52%, rgba(108, 152, 212, 0.92) 100%);
+        }
+        .add-card-header::after {
+            content: '';
+            position: absolute;
+            inset: auto 0 0;
+            height: 1px;
+            background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, .38), rgba(255, 255, 255, 0));
+        }
+        .add-card-title {
+            font-size: 1.85rem;
+            font-weight: 800;
+            letter-spacing: -.02em;
+        }
+        .add-card-subtitle {
+            margin-top: 6px;
+            color: rgba(242, 247, 255, .9);
+            font-weight: 600;
+        }
+
+        .prefill-banner {
+            padding: 16px 20px 14px;
+            background: linear-gradient(180deg, rgba(233, 242, 255, .95) 0%, rgba(242, 247, 255, .9) 100%);
+            border-bottom: 1px solid rgba(123, 150, 184, .24);
+        }
+        .prefill-banner .form-label {
+            font-size: .78rem;
+            font-weight: 700;
+            color: #38557a;
+            letter-spacing: .01em;
+        }
+        .prefill-banner .form-select,
+        .prefill-banner .form-control {
+            height: 42px;
+            border-radius: 12px;
+            border-color: rgba(117, 150, 192, .36);
+            font-weight: 600;
+        }
+        .prefill-banner .form-select:focus,
+        .prefill-banner .form-control:focus {
+            border-color: #5d89c9;
+            box-shadow: 0 0 0 .18rem rgba(93, 137, 201, .18);
+        }
+        #btnApplyPrefill {
+            height: 42px;
+            border-radius: 12px;
+            font-weight: 700;
+            letter-spacing: .01em;
+        }
+        .prefill-hint {
+            margin-top: 8px;
+            font-size: .77rem;
+            color: #57739a;
+            font-weight: 600;
+        }
+
+        .rows-section {
+            padding: 14px 20px 10px;
+        }
+        .rows-section-label {
+            font-size: .8rem;
+            color: #425c80;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        #rowCountBadge {
+            border-radius: 999px;
+            padding: 4px 10px;
+            font-size: .72rem;
+            font-weight: 700;
+            background: linear-gradient(120deg, #5c7fae, #7494be) !important;
+        }
+        #btnAdd1,
+        #btnAdd5,
+        #btnAdd10 {
+            border-radius: 11px;
+            font-weight: 700;
+            padding-left: 12px;
+            padding-right: 12px;
+        }
+
+        .rows-scroll-wrap {
+            border-radius: 14px;
+            border: 1px solid rgba(126, 152, 184, .3);
+            background: linear-gradient(180deg, rgba(251, 253, 255, .95), #fff);
+        }
+        #addRowsTable {
+            font-size: .82rem;
+        }
+        #addRowsTable thead th {
+            background: linear-gradient(180deg, #f8fbff 0%, #edf3fb 100%) !important;
+            color: #355377 !important;
+            font-size: .69rem;
+            letter-spacing: .08em;
+            border-bottom: 1px solid rgba(133, 160, 196, .35);
+            padding: 9px 8px;
+        }
+        #addRowsTable tbody tr:nth-child(even) td {
+            background: #fbfdff;
+        }
+        #addRowsTable tbody tr:hover td {
+            background: #f3f8ff;
+        }
+        #addRowsTable tbody td {
+            border-color: #e5edf7;
+        }
+        #addRowsTable .form-control,
+        #addRowsTable .form-select {
+            height: 36px;
+            padding: 6px 8px;
+            border-radius: 10px;
+            border: 1px solid #cad8ea;
+            background: #fff;
+            font-size: .79rem;
+            font-weight: 600;
+        }
+        #addRowsTable .form-control:focus,
+        #addRowsTable .form-select:focus {
+            border-color: #6c98d4 !important;
+            box-shadow: 0 0 0 .14rem rgba(86, 140, 208, .18);
+        }
+
+        .qual-picker-btn {
+            height: 36px;
+            border-radius: 10px;
+            border: 1px solid #cad8ea;
+            background: linear-gradient(180deg, #fff, #f5f8fc);
+            font-weight: 700;
+            color: #3d5a7f;
+        }
+        .qual-picker-btn.is-filled {
+            border-color: rgba(92, 137, 201, .6);
+            background: linear-gradient(180deg, #e9f2ff, #f3f8ff);
+            color: #21446f;
+        }
+        .qual-picker-menu {
+            border-radius: 12px;
+            border-color: #cbd9ea;
+            box-shadow: 0 14px 28px rgba(24, 49, 88, .18);
+            padding: 8px;
+        }
+        .qual-picker-item {
+            border-radius: 8px;
+            padding: 5px 6px;
+        }
+        .qual-picker-item:hover {
+            background: #eef5ff;
+        }
+
+        .shared-files-section {
+            padding: 0 20px 14px;
+        }
+        .shared-files-title {
+            font-size: .76rem;
+            font-weight: 800;
+            color: #4f6788;
+            letter-spacing: .08em;
+        }
+        .shared-upload-wrap {
+            border-width: 2px;
+            border-radius: 14px;
+            border-color: rgba(117, 150, 192, .34);
+            background: linear-gradient(180deg, rgba(248, 252, 255, .95), #fff);
+            padding: 12px;
+        }
+        #shared_files_input {
+            height: 42px;
+            border-radius: 12px;
+            border-color: #c8d7ea;
+            font-weight: 600;
+        }
+
+        .add-page-footer {
+            border-top-color: rgba(120, 146, 178, .22);
+            background: linear-gradient(180deg, rgba(246, 250, 255, .92), rgba(235, 243, 252, .96));
+            padding: 14px 20px;
+        }
+        #btnClearRows {
+            font-weight: 700;
+        }
+        #saveCountLabel {
+            font-size: .79rem !important;
+            color: #4a6485 !important;
+            font-weight: 700;
+        }
+
+        body.theme-blossom {
+            background:
+                radial-gradient(1200px 420px at 12% -6%, rgba(155, 28, 51, 0.18), rgba(155, 28, 51, 0) 65%),
+                radial-gradient(900px 320px at 92% 0%, rgba(246, 199, 82, 0.20), rgba(246, 199, 82, 0) 70%),
+                #fffdf4;
+        }
+
+        .theme-blossom .add-page-wrap .page-title {
+            color: #4e0f1c;
+        }
+
+        .theme-blossom .add-page-wrap .page-subtitle {
+            color: #80530a;
+        }
+
+        .theme-blossom .add-card {
+            border-color: rgba(155, 28, 51, 0.28);
+            box-shadow: 0 18px 44px rgba(96, 20, 34, 0.16);
+        }
+
+        .theme-blossom .add-card-header {
+            background: linear-gradient(108deg, #350912 0%, #6c1525 56%, #9b1c33 100%);
+        }
+
+        .theme-blossom .prefill-banner {
+            background: linear-gradient(180deg, #fffef7 0%, #fff5d9 100%);
+            border-bottom-color: rgba(147, 98, 18, 0.26);
+        }
+
+        .theme-blossom .prefill-banner .form-label {
+            color: #6c1525;
+        }
+
+        .theme-blossom .prefill-banner .form-select,
+        .theme-blossom .prefill-banner .form-control {
+            border-color: rgba(147, 98, 18, 0.34);
+            background: #fff;
+        }
+
+        .theme-blossom .prefill-banner .form-select:focus,
+        .theme-blossom .prefill-banner .form-control:focus {
+            border-color: #9b1c33;
+            box-shadow: 0 0 0 .18rem rgba(155, 28, 51, .18);
+        }
+
+        .theme-blossom .prefill-hint,
+        .theme-blossom .rows-section-label,
+        .theme-blossom .shared-files-title {
+            color: #6c1525;
+        }
+
+        .theme-blossom #rowCountBadge {
+            background: linear-gradient(120deg, #6c1525, #9b1c33) !important;
+            color: #ffefc4;
+        }
+
+        .theme-blossom .rows-scroll-wrap {
+            border-color: rgba(155, 28, 51, .3);
+            background: linear-gradient(180deg, rgba(255, 254, 250, .98), #fff);
+        }
+
+        .theme-blossom #addRowsTable thead th {
+            background: linear-gradient(180deg, #fff7db 0%, #ffefbf 100%) !important;
+            color: #6c1525 !important;
+            border-bottom-color: rgba(155, 28, 51, .24);
+        }
+
+        .theme-blossom #addRowsTable tbody tr:nth-child(even) td {
+            background: #fffdf4;
+        }
+
+        .theme-blossom #addRowsTable tbody tr:hover td {
+            background: #fff7de;
+        }
+
+        .theme-blossom #addRowsTable tbody td {
+            border-color: #f3e3bf;
+        }
+
+        .theme-blossom #addRowsTable .form-control,
+        .theme-blossom #addRowsTable .form-select {
+            border-color: #e4cfa0;
+        }
+
+        .theme-blossom #addRowsTable .form-control:focus,
+        .theme-blossom #addRowsTable .form-select:focus {
+            border-color: #9b1c33 !important;
+            box-shadow: 0 0 0 .14rem rgba(155, 28, 51, .18);
+        }
+
+        .theme-blossom .qual-picker-btn {
+            border-color: #e4cfa0;
+            background: linear-gradient(180deg, #fff, #fff5d7);
+            color: #6c1525;
+        }
+
+        .theme-blossom .qual-picker-btn.is-filled {
+            border-color: rgba(155, 28, 51, .55);
+            background: linear-gradient(180deg, #fff5d7, #fff);
+            color: #5c0f1e;
+        }
+
+        .theme-blossom .qual-picker-item:hover {
+            background: #fff5d7;
+        }
+
+        .theme-blossom .shared-upload-wrap {
+            border-color: rgba(147, 98, 18, .36);
+            background: linear-gradient(180deg, rgba(255, 253, 244, .98), #fff);
+        }
+
+        .theme-blossom #shared_files_input {
+            border-color: #e4cfa0;
+        }
+
+        .theme-blossom .add-page-footer {
+            border-top-color: rgba(147, 98, 18, .24);
+            background: linear-gradient(180deg, rgba(255, 252, 241, .94), rgba(255, 245, 217, .97));
+        }
+
+        .theme-blossom #saveCountLabel {
+            color: #6c1525 !important;
+        }
+
+        @keyframes addCardLift {
+            from {
+                opacity: 0;
+                transform: translateY(12px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (max-width: 991.98px) {
+            .add-card-title {
+                font-size: 1.5rem;
+            }
+            .add-page-wrap .page-title {
+                font-size: 1.5rem;
+            }
+            .prefill-banner {
+                padding: 12px 14px;
+            }
+            .rows-section,
+            .shared-files-section,
+            .add-page-footer {
+                padding-left: 14px;
+                padding-right: 14px;
+            }
+        }
     </style>
 </head>
 <body class="<?= $themeClass ?>">
@@ -445,11 +921,11 @@ $recentDocuments = $recentStmt->fetchAll();
             <div class="add-card">
                 <div class="add-card-header">
                     <h2 class="add-card-title">Document Entry</h2>
-                    <p class="add-card-subtitle">Each row has its own Category → Doc Type → Qualification. Scroll horizontally to see every field.</p>
+                    <p class="add-card-subtitle">One batch date and one shared attachment set apply to all rows. Each row can select multiple qualifications.</p>
                 </div>
 
                 <div class="prefill-banner">
-                    <div class="prefill-banner-title"><i class="bi bi-lightning-fill me-1"></i>Quick prefill — auto-fills all new rows when set</div>
+                    <div class="prefill-banner-title"><i class="bi bi-lightning-fill me-1"></i>Batch setup + quick prefill</div>
                     <div class="row g-2 align-items-end">
                         <div class="col-md-3">
                             <label class="form-label form-label-sm mb-1">Category</label>
@@ -467,17 +943,8 @@ $recentDocuments = $recentStmt->fetchAll();
                             </select>
                         </div>
                         <div class="col-md-2">
-                            <label class="form-label form-label-sm mb-1">Qualification</label>
-                            <select id="prefill_qualification" class="form-select form-select-sm select-qual">
-                                <option value="">— None —</option>
-                                <?php foreach ($qualifications as $q): ?>
-                                    <option value="<?= $q['id'] ?>"><?= htmlspecialchars($q['name']) ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label form-label-sm mb-1">Date Submitted</label>
-                            <input type="date" name="date_submission_shared" id="prefill_date" class="form-control form-control-sm">
+                            <label class="form-label form-label-sm mb-1">Date Submitted <span class="required-star">*</span></label>
+                            <input type="date" name="date_submission_shared" id="prefill_date" class="form-control form-control-sm" required>
                         </div>
                         <div class="col-md-2">
                             <button type="button" class="btn btn-sm btn-tb5-primary w-100" id="btnApplyPrefill">
@@ -485,7 +952,7 @@ $recentDocuments = $recentStmt->fetchAll();
                             </button>
                         </div>
                     </div>
-                    <div class="prefill-hint"><i class="bi bi-info-circle me-1"></i>Selecting a Category filters each row's Doc Type list.</div>
+                    <div class="prefill-hint"><i class="bi bi-info-circle me-1"></i>Set Date Submitted once for the whole batch. Add qualifications per row as combined values (example: BSS/CSS).</div>
                 </div>
 
                 <div class="rows-section">
@@ -505,10 +972,8 @@ $recentDocuments = $recentStmt->fetchAll();
                                 <th style="width:28px">#</th>
                                 <th style="min-width:150px">Category <span class="required-star">*</span></th>
                                 <th style="min-width:145px">Doc Type <span class="required-star">*</span></th>
-                                <th style="min-width:140px">Qualification</th>
-                                <th style="min-width:165px">Sub-Document</th>
+                                <th style="min-width:180px">Qualifications</th>
                                 <th style="min-width:130px">Batch No.</th>
-                                <th style="min-width:132px">Date Submitted</th>
                                 <th style="min-width:132px">Received (TESDA)</th>
                                 <th style="min-width:132px">Returned (Center)</th>
                                 <th style="min-width:128px">Staff Received</th>
@@ -516,14 +981,22 @@ $recentDocuments = $recentStmt->fetchAll();
                                 <th style="min-width:128px">Assessor Name</th>
                                 <th style="min-width:132px">TESDA Released</th>
                                 <th style="min-width:140px">Remarks</th>
-                                <th style="min-width:228px">Images / PDFs</th>
                                 <th style="width:34px"></th>
                             </tr>
                             </thead>
                             <tbody id="addRowsTbody">
-                            <tr id="addRowsEmpty"><td colspan="16">No rows yet — click <strong>Add Row</strong> or <strong>+ 5 Rows</strong> to begin.</td></tr>
+                            <tr id="addRowsEmpty"><td colspan="13">No rows yet — click <strong>Add Row</strong> or <strong>+ 5 Rows</strong> to begin.</td></tr>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+
+                <div class="shared-files-section">
+                    <div class="shared-files-title"><i class="bi bi-paperclip me-1"></i>Shared Files For This Batch</div>
+                    <div class="shared-upload-wrap">
+                        <input type="file" id="shared_files_input" name="shared_files[]" class="form-control form-control-sm" accept="image/*,.pdf" multiple>
+                        <div id="shared_files_meta" class="file-select-note">No shared files selected (optional, max 20 files for this batch).</div>
+                        <div id="shared_files_preview" class="file-preview-list"></div>
                     </div>
                 </div>
 
@@ -537,90 +1010,6 @@ $recentDocuments = $recentStmt->fetchAll();
             </div>
         </form>
 
-        <div class="recent-table-wrap mt-4">
-            <div class="recent-title d-flex align-items-center justify-content-between flex-wrap gap-2">
-                <span><i class="bi bi-clock-history me-1"></i>Recently Added Documents</span>
-                <small class="text-muted">Latest 50 active records</small>
-            </div>
-            <div class="table-responsive">
-                <table class="table table-sm table-striped align-middle recent-table">
-                    <thead class="table-light">
-                    <tr>
-                        <th>Category</th>
-                        <th>Qualification</th>
-                        <th>Doc Type</th>
-                        <th>Sub-Document</th>
-                        <th>Batch</th>
-                        <th>Date Submitted</th>
-                        <th>Received</th>
-                        <th>Returned</th>
-                        <th>Staff Received</th>
-                        <th>Date Assessment</th>
-                        <th>Assessor</th>
-                        <th>TESDA Released</th>
-                        <th>Remarks</th>
-                        <th>Image</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    <?php if (!$recentDocuments): ?>
-                        <tr><td colspan="14" class="text-center text-muted py-4">No records yet.</td></tr>
-                    <?php else: ?>
-                        <?php foreach ($recentDocuments as $doc):
-                            $dv = fn($v) => htmlspecialchars($v ?? '');
-                            $df = fn($d) => $d ? date('m/d/Y', strtotime($d)) : '—';
-                        ?>
-                        <tr>
-                            <td><?= $dv($doc['cat_name']) ?: '—' ?></td>
-                            <td><?= $dv($doc['qual_name']) ?: '—' ?></td>
-                            <td><?= $dv($doc['doc_type_name']) ?: '—' ?></td>
-                            <td><?= $dv($doc['document_sub']) ?: '—' ?></td>
-                            <td><?= $dv($doc['batch_no']) ?: '—' ?></td>
-                            <td><?= $df($doc['date_submission']) ?></td>
-                            <td><?= $df($doc['received_tesda']) ?></td>
-                            <td><?= $df($doc['returned_center']) ?></td>
-                            <td><?= $dv($doc['staff_received']) ?: '—' ?></td>
-                            <td><?= $df($doc['date_assessment']) ?></td>
-                            <td><?= $dv($doc['assessor_name']) ?: '—' ?></td>
-                            <td><?= $df($doc['tesda_released']) ?></td>
-                            <td><?= $dv($doc['remarks']) ?: '—' ?></td>
-                            <td>
-                                <?php $docFiles = parseStoredImagePaths($doc['image_path'] ?? null); ?>
-                                <?php if ($docFiles): ?>
-                                    <div class="d-flex flex-wrap gap-1">
-                                        <?php foreach ($docFiles as $idx => $path):
-                                            $isPdf = strtolower(pathinfo((string)$path, PATHINFO_EXTENSION)) === 'pdf';
-                                            $previewType = $isPdf ? 'pdf' : 'image';
-                                        ?>
-                                            <button
-                                                type="button"
-                                                class="preview-trigger js-preview-doc file-preview-item"
-                                                data-preview-url="../<?= htmlspecialchars($path) ?>"
-                                                data-preview-type="<?= $previewType ?>"
-                                                title="Preview file <?= $idx + 1 ?>"
-                                            >
-                                                <?php if ($isPdf): ?>
-                                                    <span class="pdf-chip"><i class="bi bi-file-earmark-pdf"></i>PDF</span>
-                                                <?php else: ?>
-                                                    <img src="../<?= htmlspecialchars($path) ?>" alt="doc" class="img-mini" onerror="this.style.display='none'">
-                                                <?php endif; ?>
-                                            </button>
-                                        <?php endforeach; ?>
-                                    </div>
-                                    <?php if (count($docFiles) > 1): ?>
-                                        <small class="file-count-note"><?= count($docFiles) ?> files</small>
-                                    <?php endif; ?>
-                                <?php else: ?>
-                                    <span class="text-muted">—</span>
-                                <?php endif; ?>
-                            </td>
-                        </tr>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
     </div>
 </main>
 
@@ -651,12 +1040,12 @@ $recentDocuments = $recentStmt->fetchAll();
 const DT_BY_CAT = <?= json_encode($dtByCat, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>;
 const DT_ALL    = <?= json_encode($dtAll, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>;
 const QUALS     = <?= json_encode(array_map(fn($q)=>['id'=>$q['id'],'name'=>$q['name']], $qualifications), JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>;
-const DOC_SUBS  = <?= json_encode($docSubs, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>;
 const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['name']], $categories), JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>;
 
 (function(){
     let rowSeq = 0;
     let currentPreviewUrl = '';
+    let sharedPreviewUrls = [];
 
     function detectPreviewType(url, kindHint) {
         if (kindHint === 'pdf' || kindHint === 'application/pdf') return 'pdf';
@@ -700,28 +1089,92 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         });
     }
 
-    function fillQualSelect(sel, selectedVal) {
-        sel.innerHTML = '<option value="">— None —</option>';
-        QUALS.forEach(q => {
-            const o = new Option(q.name, q.id, false, String(q.id) === String(selectedVal));
-            sel.appendChild(o);
-        });
+    function closeAllQualMenus() {
+        document.querySelectorAll('.js-qual-menu').forEach(menu => menu.classList.add('d-none'));
     }
 
-    function fillSubDocs(sel, docTypeId, selectedVal) {
-        sel.innerHTML = '<option value="">— None —</option>';
-        if (docTypeId && DOC_SUBS[docTypeId]) {
-            DOC_SUBS[docTypeId].forEach(name => {
-                const o = new Option(name, name, false, name === selectedVal);
-                sel.appendChild(o);
-            });
+    function setQualPickerValues(picker, values) {
+        if (!picker) return;
+        const wanted = Array.isArray(values) ? values.map(v => String(v)) : [];
+        const btn = picker.querySelector('.js-qual-btn');
+        const checks = picker.querySelectorAll('.js-qual-option');
+
+        checks.forEach(ch => {
+            ch.checked = wanted.includes(String(ch.value));
+        });
+
+        const selectedVals = [];
+        const selectedNames = [];
+        checks.forEach(ch => {
+            if (ch.checked) {
+                selectedVals.push(String(ch.value));
+                selectedNames.push(String(ch.dataset.name || ch.value));
+            }
+        });
+
+        if (btn) {
+            btn.textContent = selectedNames.length ? selectedNames.join('/') : '— None —';
+            btn.classList.toggle('is-filled', selectedNames.length > 0);
         }
+    }
+
+    function createQualPicker(rowKey, selectedVals) {
+        const picker = document.createElement('div');
+        picker.className = 'qual-picker js-qual-picker';
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'form-control form-control-sm qual-picker-btn js-qual-btn';
+        btn.textContent = '— None —';
+
+        const menu = document.createElement('div');
+        menu.className = 'qual-picker-menu js-qual-menu d-none';
+
+        QUALS.forEach(q => {
+            const label = document.createElement('label');
+            label.className = 'qual-picker-item';
+
+            const check = document.createElement('input');
+            check.type = 'checkbox';
+            check.value = String(q.id);
+            check.name = `row_qualification_ids[${rowKey}][]`;
+            check.dataset.name = q.name;
+            check.className = 'js-qual-option';
+
+            const span = document.createElement('span');
+            span.textContent = q.name;
+
+            check.addEventListener('change', function(){
+                setQualPickerValues(picker, Array.from(menu.querySelectorAll('.js-qual-option:checked')).map(ch => ch.value));
+            });
+
+            label.appendChild(check);
+            label.appendChild(span);
+            menu.appendChild(label);
+        });
+
+        btn.addEventListener('click', function(e){
+            e.stopPropagation();
+            const shouldOpen = menu.classList.contains('d-none');
+            closeAllQualMenus();
+            if (shouldOpen) menu.classList.remove('d-none');
+        });
+
+        menu.addEventListener('click', function(e){
+            e.stopPropagation();
+        });
+
+        picker.appendChild(btn);
+        picker.appendChild(menu);
+
+        setQualPickerValues(picker, selectedVals);
+        return picker;
     }
 
     function makeRow(def) {
         def = def || {};
         rowSeq++;
-        const rowFileKey = String(rowSeq);
+        const rowKey = String(rowSeq);
 
         const tr = document.createElement('tr');
         tr.dataset.seq = rowSeq;
@@ -737,15 +1190,12 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         dtSel.className = 'form-select form-select-sm select-dt';
         fillDtSelect(dtSel, def.catId || '', def.dtId || '');
 
-        const qualSel = document.createElement('select');
-        qualSel.name = 'row_qualification_id[]';
-        qualSel.className = 'form-select form-select-sm select-qual';
-        fillQualSelect(qualSel, def.qualId || '');
+        const rowKeyInp = document.createElement('input');
+        rowKeyInp.type = 'hidden';
+        rowKeyInp.name = 'row_key[]';
+        rowKeyInp.value = rowKey;
 
-        const subSel = document.createElement('select');
-        subSel.name = 'row_document_sub[]';
-        subSel.className = 'form-select form-select-sm';
-        fillSubDocs(subSel, def.dtId || '', def.subDoc || '');
+        const qualPicker = createQualPicker(rowKey, def.qualIds || []);
 
         const remarksSel = document.createElement('select');
         remarksSel.name = 'remarks[]';
@@ -765,99 +1215,8 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             return el;
         };
 
-        const dateSub = inp('date_submission', 'date');
-        if (def.dateSubmission) dateSub.value = def.dateSubmission;
-
         const receivedInp = inp('received_tesda', 'date');
         const returnedInp = inp('returned_center', 'date');
-        const syncSubmittedToReceived = () => { receivedInp.value = dateSub.value || ''; };
-        dateSub.addEventListener('change', syncSubmittedToReceived);
-        if (dateSub.value) syncSubmittedToReceived();
-
-        const imgInp = document.createElement('input');
-        imgInp.type = 'file';
-        imgInp.name = `row_image[${rowFileKey}][]`;
-        imgInp.className = 'form-control form-control-sm';
-        imgInp.accept = 'image/*,.pdf';
-        imgInp.multiple = true;
-
-        const rowKeyInp = document.createElement('input');
-        rowKeyInp.type = 'hidden';
-        rowKeyInp.name = 'row_file_key[]';
-        rowKeyInp.value = rowFileKey;
-
-        const fileMeta = document.createElement('div');
-        fileMeta.className = 'file-select-note';
-        fileMeta.textContent = 'No files selected (max 5 per row).';
-
-        const filePreviewList = document.createElement('div');
-        filePreviewList.className = 'file-preview-list';
-
-        const previewBtn = document.createElement('button');
-        previewBtn.type = 'button';
-        previewBtn.className = 'btn btn-outline-primary btn-file-preview js-row-preview';
-        previewBtn.innerHTML = '<i class="bi bi-eye me-1"></i>Preview first';
-        previewBtn.disabled = true;
-
-        imgInp.addEventListener('change', function(){
-            if (Array.isArray(this._previewUrls)) {
-                this._previewUrls.forEach(url => URL.revokeObjectURL(url));
-            }
-            this._previewUrls = [];
-            filePreviewList.innerHTML = '';
-            previewBtn.disabled = true;
-            previewBtn.innerHTML = '<i class="bi bi-eye me-1"></i>Preview first';
-
-            const files = Array.from(this.files || []);
-            if (!files.length) {
-                fileMeta.textContent = 'No files selected (max 5 per row).';
-                return;
-            }
-
-            if (files.length > 5) {
-                showToast('Only up to 5 files are allowed per row.', 'warning');
-                this.value = '';
-                fileMeta.textContent = 'No files selected (max 5 per row).';
-                return;
-            }
-
-            files.forEach((file, idx) => {
-                const url = URL.createObjectURL(file);
-                this._previewUrls.push(url);
-                const typeHint = file.type || (/\.pdf$/i.test(file.name || '') ? 'pdf' : 'image');
-
-                const item = document.createElement('button');
-                item.type = 'button';
-                item.className = 'preview-trigger js-row-file-item file-preview-item';
-                item.dataset.previewUrl = url;
-                item.dataset.previewType = typeHint;
-                item.title = file.name || ('Attachment ' + (idx + 1));
-
-                if (typeHint === 'pdf' || typeHint.toLowerCase() === 'application/pdf') {
-                    item.innerHTML = '<span class="pdf-chip"><i class="bi bi-file-earmark-pdf"></i>PDF</span>';
-                } else {
-                    const thumb = document.createElement('img');
-                    thumb.className = 'img-mini';
-                    thumb.alt = 'attachment';
-                    thumb.src = url;
-                    item.appendChild(thumb);
-                }
-
-                filePreviewList.appendChild(item);
-            });
-
-            fileMeta.textContent = files.length + ' file(s) selected.';
-            previewBtn.innerHTML = '<i class="bi bi-eye me-1"></i>Preview first (' + files.length + ')';
-            previewBtn.disabled = false;
-        });
-
-        const fileWrap = document.createElement('div');
-        fileWrap.className = 'file-cell-wrap';
-        fileWrap.appendChild(rowKeyInp);
-        fileWrap.appendChild(imgInp);
-        fileWrap.appendChild(previewBtn);
-        fileWrap.appendChild(fileMeta);
-        fileWrap.appendChild(filePreviewList);
 
         const del = document.createElement('button');
         del.type = 'button';
@@ -867,10 +1226,7 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
 
         catSel.addEventListener('change', function(){
             fillDtSelect(dtSel, this.value, '');
-            fillSubDocs(subSel, '', '');
         });
-
-        dtSel.addEventListener('change', function(){ fillSubDocs(subSel, this.value, ''); });
 
         const numTd = document.createElement('td');
         numTd.className = 'row-num-cell';
@@ -881,14 +1237,16 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             return td;
         };
 
+        const catWrap = document.createElement('div');
+        catWrap.appendChild(rowKeyInp);
+        catWrap.appendChild(catSel);
+
         [
             numTd,
-            wrap(catSel),
+            wrap(catWrap),
             wrap(dtSel),
-            wrap(qualSel),
-            wrap(subSel),
+            wrap(qualPicker),
             wrap(inp('batch_no', 'text', 'e.g. 51401-001')),
-            wrap(dateSub),
             wrap(receivedInp),
             wrap(returnedInp),
             wrap(inp('staff_received', 'text', 'Staff name')),
@@ -896,7 +1254,6 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             wrap(inp('assessor_name', 'text')),
             wrap(inp('tesda_released', 'date')),
             wrap(remarksSel),
-            wrap(fileWrap),
             wrap(del)
         ].forEach(td => tr.appendChild(td));
 
@@ -915,17 +1272,62 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         document.getElementById('saveCountLabel').textContent = n > 0 ? `${n} row${n !== 1 ? 's' : ''} queued` : '';
     }
 
-    function cleanupRowPreviewUrls(root) {
-        (root || document).querySelectorAll('input[type="file"][name^="row_image["]').forEach(inp => {
-            if (Array.isArray(inp._previewUrls)) {
-                inp._previewUrls.forEach(url => URL.revokeObjectURL(url));
-                inp._previewUrls = [];
+    function clearSharedPreviewUrls() {
+        sharedPreviewUrls.forEach(url => URL.revokeObjectURL(url));
+        sharedPreviewUrls = [];
+    }
+
+    function renderSharedFilesPreview(inputEl) {
+        const metaEl = document.getElementById('shared_files_meta');
+        const previewWrap = document.getElementById('shared_files_preview');
+        if (!metaEl || !previewWrap) return;
+
+        clearSharedPreviewUrls();
+        previewWrap.innerHTML = '';
+
+        const files = Array.from((inputEl && inputEl.files) ? inputEl.files : []);
+        if (!files.length) {
+            metaEl.textContent = 'No shared files selected (optional, max 20 files for this batch).';
+            return;
+        }
+
+        if (files.length > 20) {
+            showToast('Only up to 20 shared files are allowed for this batch.', 'warning');
+            inputEl.value = '';
+            metaEl.textContent = 'No shared files selected (optional, max 20 files for this batch).';
+            return;
+        }
+
+        files.forEach((file, idx) => {
+            const url = URL.createObjectURL(file);
+            sharedPreviewUrls.push(url);
+            const typeHint = file.type || (/\.pdf$/i.test(file.name || '') ? 'pdf' : 'image');
+
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'preview-trigger js-shared-file-item file-preview-item';
+            item.dataset.previewUrl = url;
+            item.dataset.previewType = typeHint;
+            item.title = file.name || ('Shared file ' + (idx + 1));
+
+            if (typeHint === 'pdf' || typeHint.toLowerCase() === 'application/pdf') {
+                item.innerHTML = '<span class="pdf-chip"><i class="bi bi-file-earmark-pdf"></i>PDF</span>';
+            } else {
+                const thumb = document.createElement('img');
+                thumb.className = 'img-mini';
+                thumb.alt = 'shared attachment';
+                thumb.src = url;
+                item.appendChild(thumb);
             }
+
+            previewWrap.appendChild(item);
         });
+
+        metaEl.textContent = files.length + ' shared file(s) selected.';
     }
 
     function showEmpty() {
-        document.getElementById('addRowsTbody').innerHTML = '<tr id="addRowsEmpty"><td colspan="16">No rows yet — click <strong>Add Row</strong> or <strong>+ 5 Rows</strong> to begin.</td></tr>';
+        document.getElementById('addRowsTbody').innerHTML = '<tr id="addRowsEmpty"><td colspan="13">No rows yet — click <strong>Add Row</strong> or <strong>+ 5 Rows</strong> to begin.</td></tr>';
         syncCount();
     }
 
@@ -947,9 +1349,7 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
     function getPrefill() {
         return {
             catId: document.getElementById('prefill_category').value,
-            dtId: document.getElementById('prefill_doctype').value,
-            qualId: document.getElementById('prefill_qualification').value,
-            dateSubmission: document.getElementById('prefill_date').value
+            dtId: document.getElementById('prefill_doctype').value
         };
     }
 
@@ -964,30 +1364,25 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         rows.forEach(tr => {
             const catSel = tr.querySelector('[name="row_category_id[]"]');
             const dtSel = tr.querySelector('[name="row_document_type_id[]"]');
-            const qualSel = tr.querySelector('[name="row_qualification_id[]"]');
-            const dateSub = tr.querySelector('[name="date_submission[]"]');
-            const receivedInp = tr.querySelector('[name="received_tesda[]"]');
 
             if (catSel && dtSel) {
                 catSel.value = p.catId;
                 fillDtSelect(dtSel, p.catId, p.dtId);
             }
-            if (qualSel) qualSel.value = p.qualId;
-            if (dateSub) {
-                dateSub.value = p.dateSubmission || '';
-                if (receivedInp) receivedInp.value = dateSub.value;
-            }
         });
     }
 
     function resetFormRows() {
-        cleanupRowPreviewUrls(document.getElementById('addRowsTbody'));
         rowSeq = 0;
         showEmpty();
         document.getElementById('prefill_category').value = '';
         document.getElementById('prefill_doctype').innerHTML = '<option value="">— Pick category first —</option>';
-        document.getElementById('prefill_qualification').value = '';
         document.getElementById('prefill_date').value = '';
+        const sharedInput = document.getElementById('shared_files_input');
+        if (sharedInput) {
+            sharedInput.value = '';
+            renderSharedFilesPreview(sharedInput);
+        }
     }
 
     document.addEventListener('DOMContentLoaded', function(){
@@ -995,6 +1390,10 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         const previewImg = document.getElementById('docPreviewImage');
         const previewFrame = document.getElementById('docPreviewFrame');
         const previewPlaceholder = document.getElementById('docPreviewPlaceholder');
+
+        document.addEventListener('click', function(){
+            closeAllQualMenus();
+        });
 
         document.getElementById('prefill_category').addEventListener('change', function(){
             fillDtSelect(document.getElementById('prefill_doctype'), this.value, '');
@@ -1011,9 +1410,23 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
 
         document.addEventListener('click', function(e){
             const trigger = e.target.closest('.js-preview-doc');
-            if (!trigger) return;
-            openPreview(trigger.dataset.previewUrl || '', trigger.dataset.previewType || '');
+            if (trigger) {
+                openPreview(trigger.dataset.previewUrl || '', trigger.dataset.previewType || '');
+                return;
+            }
+
+            const sharedFile = e.target.closest('.js-shared-file-item');
+            if (sharedFile) {
+                openPreview(sharedFile.dataset.previewUrl || '', sharedFile.dataset.previewType || '');
+            }
         });
+
+        const sharedInput = document.getElementById('shared_files_input');
+        if (sharedInput) {
+            sharedInput.addEventListener('change', function(){
+                renderSharedFilesPreview(this);
+            });
+        }
 
         document.getElementById('btnApplyPrefill').addEventListener('click', applyPrefillToAll);
         document.getElementById('btnAdd1').addEventListener('click', () => addRows(1, getPrefill()));
@@ -1030,30 +1443,10 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         });
 
         document.getElementById('addRowsTbody').addEventListener('click', function(e){
-            const previewItem = e.target.closest('.js-row-file-item');
-            if (previewItem) {
-                openPreview(previewItem.dataset.previewUrl || '', previewItem.dataset.previewType || '');
-                return;
-            }
-
-            const previewBtn = e.target.closest('.js-row-preview');
-            if (previewBtn) {
-                const row = previewBtn.closest('tr');
-                const fileInput = row ? row.querySelector('input[type="file"][name^="row_image["]') : null;
-                const firstUrl = fileInput && Array.isArray(fileInput._previewUrls) ? fileInput._previewUrls[0] : '';
-                const firstFile = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
-                const firstType = firstFile ? (firstFile.type || (/\.pdf$/i.test(firstFile.name || '') ? 'pdf' : 'image')) : '';
-                if (!firstUrl) return;
-
-                openPreview(firstUrl, firstType);
-                return;
-            }
-
             const btn = e.target.closest('.btn-del-row');
             if (!btn) return;
             const row = btn.closest('tr');
             if (!row) return;
-            cleanupRowPreviewUrls(row);
             row.remove();
             reindex();
             syncCount();
@@ -1065,6 +1458,12 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             if (rows.length === 0) {
                 e.preventDefault();
                 showToast('Add at least one row before saving.', 'warning');
+                return;
+            }
+
+            if (!document.getElementById('prefill_date').value) {
+                e.preventDefault();
+                showToast('Set Date Submitted for this batch.', 'warning');
                 return;
             }
 
@@ -1087,10 +1486,10 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         });
 
         window.addEventListener('beforeunload', function(){
-            cleanupRowPreviewUrls(document.getElementById('addRowsTbody'));
+            clearSharedPreviewUrls();
         });
 
-        addRows(1);
+        addRows(5);
     });
 })();
 </script>

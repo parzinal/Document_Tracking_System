@@ -11,7 +11,7 @@
 
 /* ---- Theme-specific sidebar colors ---- */
 .theme-bigfive  { --sidebar-bg: #0e2240; --sidebar-hover: #1a3560; --sidebar-active-bg: #091628; --sidebar-scrollbar: #2a5090; }
-.theme-blossom  { --sidebar-bg: #260202; --sidebar-hover: #440b0b; --sidebar-active-bg: #1a0101; --sidebar-scrollbar: #6e1a1a; }
+.theme-blossom  { --sidebar-bg: #2b0810; --sidebar-hover: #4d1620; --sidebar-active-bg: #1c050b; --sidebar-scrollbar: #9a6a1f; }
 
 .tb5-sidebar {
     position: fixed;
@@ -155,6 +155,16 @@
     background: rgba(180, 40, 40, 0.2);
     color: #ffaaaa;
     border-left-color: #e88080;
+}
+
+.theme-blossom .sidebar-logout {
+    color: rgba(255, 214, 102, 0.82);
+}
+
+.theme-blossom .sidebar-logout:hover {
+    background: rgba(255, 214, 102, 0.18);
+    color: #ffe7ad;
+    border-left-color: #ffd666;
 }
 
 /* ---- COLLAPSED STATE ---- */
