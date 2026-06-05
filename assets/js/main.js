@@ -156,7 +156,21 @@ document.addEventListener('DOMContentLoaded', function () {
             sourceRows = Array.from(dtInstance.rows({ search: 'applied' }).nodes());
         }
         sourceRows.forEach(function (tr) {
-            body.appendChild(tr.cloneNode(true));
+            // Create a clone of the row
+            const rowClone = tr.cloneNode(true);
+            
+            // Process remarks cells to show their text content instead of dropdowns
+            rowClone.querySelectorAll('.remarks-select').forEach(function(select) {
+                const selectedOption = select.options[select.selectedIndex];
+                const displayText = selectedOption ? selectedOption.text : '—';
+                
+                // Replace the select element with a span containing the text
+                const span = document.createElement('span');
+                span.textContent = displayText;
+                select.parentNode.replaceChild(span, select);
+            });
+            
+            body.appendChild(rowClone);
         });
         clone.appendChild(body);
 

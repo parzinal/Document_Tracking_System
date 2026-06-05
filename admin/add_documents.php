@@ -83,8 +83,8 @@ function handleSharedUploads(): array {
         if (!in_array($mime, $allowed, true)) {
             throw new RuntimeException('Invalid file type in one of the shared attachments.');
         }
-        if ($size > 5 * 1024 * 1024) {
-            throw new RuntimeException('One of the shared attachments is too large (max 5 MB).');
+        if ($size > 100 * 1024 * 1024) {
+            throw new RuntimeException('One of the shared attachments is too large (max 100 MB).');
         }
 
         $ext = strtolower(pathinfo((string)$original, PATHINFO_EXTENSION));
@@ -110,6 +110,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'add_multiple_documents') {
         $date_sub_shared_raw = trim((string)($_POST['date_submission_shared'] ?? ''));
         $date_sub_shared = $date_sub_shared_raw !== '' ? $date_sub_shared_raw : null;
+        $date_submissions = $_POST['date_submission'] ?? [];
         $category_ids      = $_POST['row_category_id']      ?? [];
         $doctype_ids       = $_POST['row_document_type_id'] ?? [];
         $qualification_map = $_POST['row_qualification_ids'] ?? [];
@@ -142,10 +143,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         );
 
         try {
-            if ($date_sub_shared === null) {
-                throw new RuntimeException('Date Submitted is required for this batch.');
-            }
-
             $sharedPaths = handleSharedUploads();
             $sharedImagePath = encodeStoredImagePaths($sharedPaths);
 
@@ -176,6 +173,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $batch = trim($batch_nos[$i] ?? '') ?: null;
                 $rem = trim($remarks_arr[$i] ?? '') ?: null;
+                $row_date = trim((string)($date_submissions[$i] ?? ''));
+                $row_date = $row_date !== '' ? $row_date : $date_sub_shared;
 
                 $hasOtherData = (
                     $cat_id !== null ||
@@ -207,7 +206,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $cat_id,
                         $dt_id,
                         $primaryQualId,
-                        $date_sub_shared,
+                        $row_date,
                         $batch,
                         $rem,
                         ($received_tesdas[$i] ?? '') ?: null,
@@ -446,6 +445,12 @@ $dtAll = array_map(fn($dt) => ['id' => $dt['id'], 'name' => $dt['name']], $docum
             box-shadow: 0 8px 16px rgba(20, 40, 90, .14);
             z-index: 25;
             padding: 6px;
+        }
+        .qual-picker-menu.is-floating {
+            position: fixed;
+            left: 0;
+            right: auto;
+            z-index: 2000;
         }
         .qual-picker-item {
             display: flex;
@@ -943,8 +948,8 @@ $dtAll = array_map(fn($dt) => ['id' => $dt['id'], 'name' => $dt['name']], $docum
                             </select>
                         </div>
                         <div class="col-md-2">
-                            <label class="form-label form-label-sm mb-1">Date Submitted <span class="required-star">*</span></label>
-                            <input type="date" name="date_submission_shared" id="prefill_date" class="form-control form-control-sm" required>
+                            <label class="form-label form-label-sm mb-1">Date Submitted</label>
+                            <input type="date" name="date_submission_shared" id="prefill_date" class="form-control form-control-sm">
                         </div>
                         <div class="col-md-2">
                             <button type="button" class="btn btn-sm btn-tb5-primary w-100" id="btnApplyPrefill">
@@ -952,7 +957,7 @@ $dtAll = array_map(fn($dt) => ['id' => $dt['id'], 'name' => $dt['name']], $docum
                             </button>
                         </div>
                     </div>
-                    <div class="prefill-hint"><i class="bi bi-info-circle me-1"></i>Set Date Submitted once for the whole batch. Add qualifications per row as combined values (example: BSS/CSS).</div>
+                    <div class="prefill-hint"><i class="bi bi-info-circle me-1"></i>Optional: set Date Submitted once to prefill all rows.</div>
                 </div>
 
                 <div class="rows-section">
@@ -974,6 +979,7 @@ $dtAll = array_map(fn($dt) => ['id' => $dt['id'], 'name' => $dt['name']], $docum
                                 <th style="min-width:145px">Doc Type <span class="required-star">*</span></th>
                                 <th style="min-width:180px">Qualifications</th>
                                 <th style="min-width:130px">Batch No.</th>
+                                <th style="min-width:132px">Date Submitted</th>
                                 <th style="min-width:132px">Received (TESDA)</th>
                                 <th style="min-width:132px">Returned (Center)</th>
                                 <th style="min-width:128px">Staff Received</th>
@@ -985,7 +991,7 @@ $dtAll = array_map(fn($dt) => ['id' => $dt['id'], 'name' => $dt['name']], $docum
                             </tr>
                             </thead>
                             <tbody id="addRowsTbody">
-                            <tr id="addRowsEmpty"><td colspan="13">No rows yet — click <strong>Add Row</strong> or <strong>+ 5 Rows</strong> to begin.</td></tr>
+                            <tr id="addRowsEmpty"><td colspan="14">No rows yet — click <strong>Add Row</strong> or <strong>+ 5 Rows</strong> to begin.</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1090,7 +1096,34 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
     }
 
     function closeAllQualMenus() {
-        document.querySelectorAll('.js-qual-menu').forEach(menu => menu.classList.add('d-none'));
+        document.querySelectorAll('.js-qual-menu').forEach(menu => {
+            menu.classList.add('d-none');
+            menu.classList.remove('is-dropup', 'is-floating');
+            menu.style.top = '';
+            menu.style.left = '';
+            menu.style.width = '';
+        });
+    }
+
+    function positionQualMenu(picker, menu) {
+        if (!picker || !menu) return;
+        const pickerRect = picker.getBoundingClientRect();
+        const viewportBottom = window.innerHeight || document.documentElement.clientHeight;
+        const menuHeight = menu.offsetHeight || 180;
+        const spaceBelow = viewportBottom - pickerRect.bottom;
+        const spaceAbove = pickerRect.top;
+        const shouldDropUp = spaceBelow < menuHeight && spaceAbove > spaceBelow;
+
+        menu.classList.toggle('is-dropup', shouldDropUp);
+        menu.classList.add('is-floating');
+        menu.style.width = `${Math.max(pickerRect.width, 180)}px`;
+        menu.style.left = `${pickerRect.left}px`;
+
+        if (shouldDropUp) {
+            menu.style.top = `${Math.max(6, pickerRect.top - menuHeight - 6)}px`;
+        } else {
+            menu.style.top = `${Math.min(viewportBottom - 6, pickerRect.bottom + 6)}px`;
+        }
     }
 
     function setQualPickerValues(picker, values) {
@@ -1157,7 +1190,10 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             e.stopPropagation();
             const shouldOpen = menu.classList.contains('d-none');
             closeAllQualMenus();
-            if (shouldOpen) menu.classList.remove('d-none');
+            if (shouldOpen) {
+                menu.classList.remove('d-none');
+                positionQualMenu(picker, menu);
+            }
         });
 
         menu.addEventListener('click', function(e){
@@ -1215,8 +1251,18 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             return el;
         };
 
+        const dateSubInp = inp('date_submission', 'date');
+        dateSubInp.classList.add('js-row-date-sub');
+        if (def.dateSub) dateSubInp.value = def.dateSub;
+
         const receivedInp = inp('received_tesda', 'date');
         const returnedInp = inp('returned_center', 'date');
+
+        const syncReceivedFromDateSub = () => {
+            receivedInp.value = dateSubInp.value || '';
+        };
+        if (def.dateSub) syncReceivedFromDateSub();
+        dateSubInp.addEventListener('change', syncReceivedFromDateSub);
 
         const del = document.createElement('button');
         del.type = 'button';
@@ -1247,6 +1293,7 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             wrap(dtSel),
             wrap(qualPicker),
             wrap(inp('batch_no', 'text', 'e.g. 51401-001')),
+            wrap(dateSubInp),
             wrap(receivedInp),
             wrap(returnedInp),
             wrap(inp('staff_received', 'text', 'Staff name')),
@@ -1327,7 +1374,7 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
     }
 
     function showEmpty() {
-        document.getElementById('addRowsTbody').innerHTML = '<tr id="addRowsEmpty"><td colspan="13">No rows yet — click <strong>Add Row</strong> or <strong>+ 5 Rows</strong> to begin.</td></tr>';
+        document.getElementById('addRowsTbody').innerHTML = '<tr id="addRowsEmpty"><td colspan="14">No rows yet — click <strong>Add Row</strong> or <strong>+ 5 Rows</strong> to begin.</td></tr>';
         syncCount();
     }
 
@@ -1349,7 +1396,8 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
     function getPrefill() {
         return {
             catId: document.getElementById('prefill_category').value,
-            dtId: document.getElementById('prefill_doctype').value
+            dtId: document.getElementById('prefill_doctype').value,
+            dateSub: document.getElementById('prefill_date').value
         };
     }
 
@@ -1364,10 +1412,16 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         rows.forEach(tr => {
             const catSel = tr.querySelector('[name="row_category_id[]"]');
             const dtSel = tr.querySelector('[name="row_document_type_id[]"]');
+            const dateSubInp = tr.querySelector('.js-row-date-sub');
 
             if (catSel && dtSel) {
                 catSel.value = p.catId;
                 fillDtSelect(dtSel, p.catId, p.dtId);
+            }
+            if (dateSubInp) {
+                dateSubInp.value = p.dateSub || '';
+                const receivedInp = tr.querySelector('[name="received_tesda[]"]');
+                if (receivedInp) receivedInp.value = p.dateSub || '';
             }
         });
     }
@@ -1386,6 +1440,12 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
     }
 
     document.addEventListener('DOMContentLoaded', function(){
+        const rowsWrap = document.querySelector('.rows-scroll-wrap');
+        if (rowsWrap) {
+            rowsWrap.addEventListener('scroll', closeAllQualMenus);
+        }
+        window.addEventListener('scroll', closeAllQualMenus, true);
+        window.addEventListener('resize', closeAllQualMenus);
         const previewModalEl = document.getElementById('docPreviewModal');
         const previewImg = document.getElementById('docPreviewImage');
         const previewFrame = document.getElementById('docPreviewFrame');
@@ -1461,12 +1521,6 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
                 return;
             }
 
-            if (!document.getElementById('prefill_date').value) {
-                e.preventDefault();
-                showToast('Set Date Submitted for this batch.', 'warning');
-                return;
-            }
-
             let bad = false;
             rows.forEach(tr => {
                 const cat = tr.querySelector('[name="row_category_id[]"]').value;
@@ -1489,7 +1543,7 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             clearSharedPreviewUrls();
         });
 
-        addRows(5);
+        addRows(1);
     });
 })();
 </script>

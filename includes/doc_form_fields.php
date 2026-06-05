@@ -144,7 +144,7 @@
             <label class="doc-form-label">Upload Image / Document</label>
             <div class="upload-zone" id="uploadZone" onclick="document.getElementById('docImageInput').click()" style="border:2px dashed #d0d7e2;border-radius:10px;padding:20px 12px;text-align:center;cursor:pointer;background:#f7f9fc;transition:border-color 0.2s,background 0.2s;">
                 <i class="bi bi-cloud-arrow-up" style="font-size:1.6rem;color:#8899aa;"></i>
-                <p class="mb-0 mt-1" style="font-size:0.78rem;color:#8899aa;" id="uploadLabel">Click to upload<br><span style="font-size:0.7rem;">JPG, PNG, PDF · Max 5 MB</span></p>
+                <p class="mb-0 mt-1" style="font-size:0.78rem;color:#8899aa;" id="uploadLabel">Click to upload<br><span style="font-size:0.7rem;">JPG, PNG, PDF · Max 100 MB</span></p>
             </div>
             <input type="file" name="doc_image" id="docImageInput" accept="image/*,.pdf" class="d-none">
         </div>

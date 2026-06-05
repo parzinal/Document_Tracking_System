@@ -2,6 +2,28 @@
 // =========================================================
 // Documents Tracking
 // =========================================================
+if (isset($_GET['debug_path'])) {
+    $remote = $_SERVER['REMOTE_ADDR'] ?? '';
+    if ($remote === '127.0.0.1' || $remote === '::1') {
+        header('Content-Type: application/json; charset=UTF-8');
+        $uploadDir = realpath(__DIR__ . '/../assets/upload');
+        $uploadCount = 0;
+        if ($uploadDir && is_dir($uploadDir)) {
+            $entries = scandir($uploadDir);
+            $uploadCount = max(0, count($entries) - 2);
+        }
+        echo json_encode([
+            'script_dir' => __DIR__,
+            'script_realpath' => realpath(__DIR__),
+            'document_root' => $_SERVER['DOCUMENT_ROOT'] ?? '',
+            'upload_dir' => $uploadDir ?: '',
+            'upload_exists' => $uploadDir ? is_dir($uploadDir) : false,
+            'upload_count' => $uploadCount,
+        ], JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+}
+
 require_once __DIR__ . '/../includes/auth_check.php';
 $sid = (int)$_SESSION['active_system_id'];
 
@@ -52,6 +74,7 @@ function handleUpload(): ?string {
         if (count($names) > 20) throw new RuntimeException('Only up to 20 files allowed.');
 
         $paths = [];
+        $totalsize = 0;
         foreach ($names as $i => $original) {
             $error = $_FILES['doc_image']['error'][$i] ?? UPLOAD_ERR_NO_FILE;
             if ($error === UPLOAD_ERR_NO_FILE) continue;
@@ -62,8 +85,9 @@ function handleUpload(): ?string {
 
             $size = (int)($_FILES['doc_image']['size'][$i] ?? 0);
             if ($size <= 0) continue;
-            if ($size > 5 * 1024 * 1024) throw new RuntimeException('File too large. Max 5 MB.');
-
+            if ($size > 100 * 1024 * 1024) throw new RuntimeException('File too large. Max 100 MB.');
+            $totalsize += $size;
+            if ($totalsize > 100 * 1024 * 1024) throw new RuntimeException('Total upload size exceed 100 MB.');
             $mime = $finfo->file($tmp);
             if (!in_array($mime, $allowed, true)) throw new RuntimeException('Invalid file type.');
 
@@ -88,7 +112,7 @@ function handleUpload(): ?string {
     if (empty($_FILES['doc_image']['name'])) return null;
     $mime    = $finfo->file($_FILES['doc_image']['tmp_name']);
     if (!in_array($mime, $allowed, true)) throw new RuntimeException('Invalid file type.');
-    if ($_FILES['doc_image']['size'] > 5*1024*1024) throw new RuntimeException('File too large. Max 5 MB.');
+    if ($_FILES['doc_image']['size'] > 100*1024*1024) throw new RuntimeException('File too large. Max 100 MB.');
     $ext      = pathinfo($_FILES['doc_image']['name'], PATHINFO_EXTENSION);
     $filename = uniqid('doc_', true) . '.' . strtolower($ext);
     move_uploaded_file($_FILES['doc_image']['tmp_name'], __DIR__ . '/../assets/upload/' . $filename);
@@ -98,6 +122,21 @@ function handleUpload(): ?string {
 function normalizeRemark($value): ?string {
     $v = strtolower(trim((string)$value));
     return in_array($v, ['received', 'returned'], true) ? $v : null;
+}
+
+function normalizeDateInput($value): ?string {
+    $raw = trim((string)$value);
+    if ($raw === '') return null;
+
+    $formats = ['Y-m-d', 'Y/m/d', 'm/d/Y', 'd/m/Y', 'm-d-Y', 'd-m-Y'];
+    foreach ($formats as $format) {
+        $dt = DateTime::createFromFormat('!' . $format, $raw);
+        if ($dt instanceof DateTime && $dt->format($format) === $raw) {
+            return $dt->format('Y-m-d');
+        }
+    }
+
+    return null;
 }
 
 function parseStoredImagePaths(?string $raw): array {
@@ -170,8 +209,8 @@ function handleSharedUploads(): array {
         if (!in_array($mime, $allowed, true)) {
             throw new RuntimeException('Invalid file type in one of the shared attachments.');
         }
-        if ($size > 5 * 1024 * 1024) {
-            throw new RuntimeException('One of the shared attachments is too large (max 5 MB).');
+        if ($size > 100 * 1024 * 1024) {
+            throw new RuntimeException('One of the shared attachments is too large (max 100 MB).');
         }
 
         $ext = strtolower(pathinfo((string)$original, PATHINFO_EXTENSION));
@@ -212,7 +251,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'add_multiple_documents') {
-        $date_sub_shared   = $_POST['date_submission_shared'] ?: null;
+        $date_sub_shared   = normalizeDateInput($_POST['date_submission_shared'] ?? null);
+        $date_submissions  = $_POST['date_submission']        ?? [];
         $category_ids      = $_POST['row_category_id']        ?? [];
         $doctype_ids       = $_POST['row_document_type_id']   ?? [];
         $qualification_ids = $_POST['row_qualification_id']   ?? [];
@@ -232,17 +272,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
 
         $count = 0;
-        for ($i = 0, $n = count($batch_nos); $i < $n; $i++) {
-            $batch = trim($batch_nos[$i]) ?: null;
+        $rowTotal = max(
+            count($category_ids),
+            count($doctype_ids),
+            count($qualification_ids),
+            count($batch_nos),
+            count($date_submissions),
+            count($remarks_arr)
+        );
+
+        for ($i = 0; $i < $rowTotal; $i++) {
+            $batch = trim((string)($batch_nos[$i] ?? '')) ?: null;
             $rem   = normalizeRemark($remarks_arr[$i] ?? '');
-            if ($batch === null && $rem === null) continue;
-            $cat_id  = intval($category_ids[$i]      ?? 0) ?: null;
-            $dt_id   = intval($doctype_ids[$i]        ?? 0) ?: null;
-            $qual_id = intval($qualification_ids[$i]  ?? 0) ?: null;
-            $ins->execute([$sid,$cat_id,$dt_id,$qual_id,$date_sub_shared,$batch,$rem,
-                $received_tesdas[$i]  ?: null, $returned_centers[$i] ?: null,
-                ($staff_receiveds[$i] ?? '') ?: null, $date_assessments[$i] ?: null,
-                trim($assessor_names[$i]   ?? '') ?: null, $tesda_releaseds[$i]  ?: null]);
+            $row_date = normalizeDateInput($date_submissions[$i] ?? null);
+            $row_date = $row_date !== null ? $row_date : ($date_sub_shared ?: null);
+            $cat_id  = intval($category_ids[$i] ?? 0) ?: null;
+            $dt_id   = intval($doctype_ids[$i] ?? 0) ?: null;
+            $qual_id = intval($qualification_ids[$i] ?? 0) ?: null;
+
+            $hasAnyRowData = (
+                $cat_id !== null ||
+                $dt_id !== null ||
+                $qual_id !== null ||
+                $row_date !== null ||
+                $batch !== null ||
+                $rem !== null ||
+                (($received_tesdas[$i] ?? '') !== '') ||
+                (($returned_centers[$i] ?? '') !== '') ||
+                (($staff_receiveds[$i] ?? '') !== '') ||
+                (($date_assessments[$i] ?? '') !== '') ||
+                (trim((string)($assessor_names[$i] ?? '')) !== '') ||
+                (($tesda_releaseds[$i] ?? '') !== '')
+            );
+
+            if (!$hasAnyRowData) {
+                continue;
+            }
+
+            if ($cat_id === null || $dt_id === null) {
+                continue;
+            }
+
+            $ins->execute([$sid,$cat_id,$dt_id,$qual_id,$row_date,$batch,$rem,
+                ($received_tesdas[$i] ?? '') ?: null, ($returned_centers[$i] ?? '') ?: null,
+                ($staff_receiveds[$i] ?? '') ?: null, ($date_assessments[$i] ?? '') ?: null,
+                trim((string)($assessor_names[$i] ?? '')) ?: null, ($tesda_releaseds[$i] ?? '') ?: null]);
             $count++;
         }
         setTrackingFlash($count . ' document(s) added.');
@@ -250,9 +324,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'upload_batch_images') {
         $date_sub_raw = trim((string)($_POST['date_submission'] ?? ''));
+        $date_sub_norm = normalizeDateInput($date_sub_raw);
         $replace = isset($_POST['replace_existing']) && (string)$_POST['replace_existing'] === '1';
 
-        if ($date_sub_raw !== '__none__' && $date_sub_raw !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_sub_raw)) {
+        if ($date_sub_raw !== '__none__' && $date_sub_raw !== '' && $date_sub_norm === null) {
             setTrackingFlash('Invalid date selected for batch upload.', 'danger');
         } else {
             try {
@@ -272,8 +347,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $sel = $pdo->prepare('SELECT id,image_path FROM documents WHERE system_id=? AND is_archived=0 AND (date_submission IS NULL OR TRIM(date_submission)="")');
                     $sel->execute([$sid]);
                 } else {
-                    $sel = $pdo->prepare('SELECT id,image_path FROM documents WHERE system_id=? AND is_archived=0 AND date_submission=?');
-                    $sel->execute([$sid, $date_sub_raw]);
+                    $queryDate = $date_sub_norm ?? $date_sub_raw;
+                    $sel = $pdo->prepare('SELECT id,image_path FROM documents WHERE system_id=? AND is_archived=0 AND (date_submission=? OR date_submission=?)');
+                    $sel->execute([$sid, $date_sub_raw, $queryDate]);
                 }
 
                 $rows = $sel->fetchAll();
@@ -335,14 +411,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $catId,
                     intval($_POST['document_type_id']) ?: null,
                     $primaryQualId,
-                    $_POST['date_submission'] ?: null,
+                    normalizeDateInput($_POST['date_submission'] ?? null),
                     trim($_POST['batch_no'] ?? '') ?: null,
-                    ($_POST['received_tesda'] ?? '') ?: null,
-                    ($_POST['returned_center'] ?? '') ?: null,
+                    normalizeDateInput($_POST['received_tesda'] ?? null),
+                    normalizeDateInput($_POST['returned_center'] ?? null),
                     trim($_POST['staff_received'] ?? '') ?: null,
-                    ($_POST['date_assessment'] ?? '') ?: null,
+                    normalizeDateInput($_POST['date_assessment'] ?? null),
                     trim($_POST['assessor_name'] ?? '') ?: null,
-                    ($_POST['tesda_released'] ?? '') ?: null,
+                    normalizeDateInput($_POST['tesda_released'] ?? null),
                     normalizeRemark($_POST['remarks'] ?? null),
                     $docId,
                     $sid
@@ -456,12 +532,13 @@ $dateLinesMap = [];
 foreach ($documents as $doc) {
     $rawDate = trim((string)($doc['date_submission'] ?? ''));
     $key = $rawDate !== '' ? $rawDate : '__none__';
+    $normalizedDate = normalizeDateInput($rawDate);
 
     if (!isset($dateLinesMap[$key])) {
         $dateLinesMap[$key] = [
             'value' => $key,
-            'label' => $rawDate !== '' ? date('F d, Y', strtotime($rawDate)) : 'No Date Submitted',
-            'sort' => $rawDate !== '' ? $rawDate : '0000-00-00',
+            'label' => $rawDate !== '' ? ($normalizedDate !== null ? date('F d, Y', strtotime($normalizedDate)) : $rawDate) : 'No Date Submitted',
+            'sort' => $rawDate !== '' ? ($normalizedDate ?? $rawDate) : '0000-00-00',
             'count' => 0,
             'with_files' => 0,
         ];
@@ -1121,6 +1198,147 @@ $dtAll=array_map(fn($dt)=>['id'=>$dt['id'],'name'=>$dt['name']],$documentTypes);
             border-color: #d6ab57;
             background: #fff2cf;
         }
+
+/* ========================================================
+   PRINT STYLES — fixes Remarks column disappearing
+   ======================================================== */
+@media print {
+
+    /* 1. Force the modal to be visible and fill the page */
+    .modal {
+        position: static !important;
+        display: block !important;
+        overflow: visible !important;
+    }
+    .modal-dialog {
+        max-width: 100% !important;
+        margin: 0 !important;
+    }
+    .modal-content {
+        border: none !important;
+        box-shadow: none !important;
+        max-height: none !important;
+    }
+
+    /* 2. Kill the scrollable wrapper that clips columns */
+    .table-responsive {
+        max-height: none !important;
+        overflow: visible !important;
+        border-radius: 0 !important;
+    }
+    .slide-table-wrap {
+        overflow: visible !important;
+    }
+    .modal-body {
+        overflow: visible !important;
+        max-height: none !important;
+        padding: 0 !important;
+    }
+
+    /* 3. Reset table to natural auto layout for print */
+    #documentsTable {
+        min-width: 0 !important;
+        width: 100% !important;
+        border-collapse: collapse !important;
+        border-spacing: 0 !important;
+        font-size: 7pt !important;
+        table-layout: auto !important;
+    }
+
+    /* 4. Flatten all cell decoration */
+    #documentsTable thead th,
+    #documentsTable tbody td {
+        white-space: normal !important;
+        padding: 4pt 5pt !important;
+        border: 0.5pt solid #ccc !important;
+        background: #fff !important;
+        color: #000 !important;
+        position: static !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        min-width: 0 !important;
+        max-width: none !important;
+    }
+
+    /* 5. Override ALL the nth-child min-widths that force overflow */
+    #documentsTable th:nth-child(2),  #documentsTable td:nth-child(2),
+    #documentsTable th:nth-child(3),  #documentsTable td:nth-child(3),
+    #documentsTable th:nth-child(4),  #documentsTable td:nth-child(4),
+    #documentsTable th:nth-child(5),  #documentsTable td:nth-child(5),
+    #documentsTable th:nth-child(6),  #documentsTable td:nth-child(6),
+    #documentsTable th:nth-child(7),  #documentsTable td:nth-child(7),
+    #documentsTable th:nth-child(8),  #documentsTable td:nth-child(8),
+    #documentsTable th:nth-child(9),  #documentsTable td:nth-child(9),
+    #documentsTable th:nth-child(10), #documentsTable td:nth-child(10),
+    #documentsTable th:nth-child(11), #documentsTable td:nth-child(11),
+    #documentsTable th:nth-child(12), #documentsTable td:nth-child(12),
+    #documentsTable th:nth-child(13), #documentsTable td:nth-child(13),
+    #documentsTable th:nth-child(14), #documentsTable td:nth-child(14),
+    #documentsTable th:nth-child(15), #documentsTable td:nth-child(15) {
+        min-width: 0 !important;
+        width: auto !important;
+    }
+
+    /* 6. Flatten pill/chip styles so text is readable when printed */
+    #documentsTable .doc-pill,
+    #documentsTable .date-chip,
+    #documentsTable .remark-chip {
+        display: inline !important;
+        padding: 0 !important;
+        border: none !important;
+        background: transparent !important;
+        color: #000 !important;
+        font-weight: normal !important;
+        border-radius: 0 !important;
+        font-size: 7pt !important;
+    }
+    #documentsTable .empty-cell {
+        color: #999 !important;
+        font-style: normal !important;
+    }
+
+    /* 7. Hide everything that must not print */
+    .no-print,
+    .modal-header,
+    .modal-footer,
+    .modal-doc-toolbar,
+    .slide-dt-bar,
+    .slide-dt-foot,
+    .td-img,
+    #documentsTable thead th:last-child,
+    #documentsTable tbody td:last-child,
+    nav, header, aside, .sidebar,
+    .main-content > .page-header,
+    .main-content > .dt-toolbar,
+    .main-content > .date-lines-wrap,
+    .alert {
+        display: none !important;
+    }
+
+    /* 8. Keep page breaks clean */
+    #documentsTable tbody tr {
+        page-break-inside: avoid;
+        break-inside: avoid;
+    }
+    #documentsTable thead {
+        display: table-header-group;
+    }
+
+    /* 9. Make the modal's inner table wrapper full width */
+    #dateDocsModal,
+    #dateDocsModal .modal-dialog,
+    #dateDocsModal .modal-content,
+    #dateDocsModal .modal-body {
+        position: static !important;
+        display: block !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow: visible !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+}
+
     </style>
 </head>
 <body class="<?= $themeClass ?>">
@@ -1578,7 +1796,7 @@ $dtAll=array_map(fn($dt)=>['id'=>$dt['id'],'name'=>$dt['name']],$documentTypes);
                     <label class="form-label fw-semibold">Select File(s)</label>
                     <input type="file" name="doc_image[]" class="form-control" accept="image/*,.pdf" multiple required>
                     <div id="imgUpload_note" class="form-text mt-2 text-muted" style="display:none"></div>
-                    <div class="form-text mt-2">JPG, PNG, GIF, WEBP or PDF · max 5 MB per file · up to 20 files</div>
+                    <div class="form-text mt-2">JPG, PNG, GIF, WEBP or PDF · max 100 MB per file · up to 20 files</div>
                 </div>
                 <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button type="submit" class="btn btn-tb5-primary"><i class="bi bi-upload me-1"></i>Upload</button></div>
             </form>
@@ -1600,7 +1818,7 @@ $dtAll=array_map(fn($dt)=>['id'=>$dt['id'],'name'=>$dt['name']],$documentTypes);
                     <label class="form-label fw-semibold">Select File(s)</label>
                     <input type="file" name="shared_files[]" class="form-control" accept="image/*,.pdf" multiple required>
                     <div id="batchUpload_note" class="form-text mt-2 text-muted" style="display:none"></div>
-                    <div class="form-text mt-2">JPG, PNG, GIF, WEBP or PDF · max 5 MB per file · up to 20 files</div>
+                    <div class="form-text mt-2">JPG, PNG, GIF, WEBP or PDF · max 100 MB per file · up to 20 files</div>
                 </div>
                 <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button type="submit" class="btn btn-tb5-primary"><i class="bi bi-upload me-1"></i>Upload</button></div>
             </form>
@@ -1741,11 +1959,12 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
         // cascade: category change → refill doctype
         catSel.addEventListener('change', function(){ fillDtSelect(dtSel, this.value, ''); });
 
-        const inp = (name, type, ph) => {
+        const inp = (name, type, ph, value) => {
             const el = document.createElement('input');
             el.type = type||'text'; el.name = name+'[]';
             el.className = 'form-control form-control-sm';
             if (ph) el.placeholder = ph;
+            if (value) el.value = value;
             return el;
         };
 
@@ -1791,7 +2010,7 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
          wrap(dtSel),
          wrap(qualSel),
          wrap(inp('batch_no','text','e.g. 51401-001')),
-         wrap(inp('date_submission','date')),
+         wrap(inp('date_submission','date', '', def.dateSubmission || '')),
          wrap(receivedInp),
          wrap(returnedInp),
          wrap(inp('staff_received','text','Staff name')),
@@ -1843,6 +2062,7 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             catId:  document.getElementById('prefill_category').value,
             dtId:   document.getElementById('prefill_doctype').value,
             qualId: document.getElementById('prefill_qualification').value,
+            dateSubmission: document.getElementById('prefill_date').value,
         };
     }
 
@@ -1858,8 +2078,10 @@ const CATS_PHP  = <?= json_encode(array_map(fn($c)=>['id'=>$c['id'],'name'=>$c['
             const catSel  = tr.querySelector('[name="row_category_id[]"]');
             const dtSel   = tr.querySelector('[name="row_document_type_id[]"]');
             const qualSel = tr.querySelector('[name="row_qualification_id[]"]');
+            const dateInp = tr.querySelector('[name="date_submission[]"]');
             if (catSel && dtSel) { catSel.value = p.catId; fillDtSelect(dtSel, p.catId, p.dtId); }
             if (qualSel) qualSel.value = p.qualId;
+            if (dateInp) dateInp.value = p.dateSubmission || '';
         });
     }
 
